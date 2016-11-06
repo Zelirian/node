@@ -612,49 +612,6 @@ class IsEffectPhiMatcher final : public NodeMatcher {
 };
 
 
-class IsEffectSetMatcher final : public NodeMatcher {
- public:
-  IsEffectSetMatcher(const Matcher<Node*>& effect0_matcher,
-                     const Matcher<Node*>& effect1_matcher)
-      : NodeMatcher(IrOpcode::kEffectSet),
-        effect0_matcher_(effect0_matcher),
-        effect1_matcher_(effect1_matcher) {}
-
-  void DescribeTo(std::ostream* os) const final {
-    NodeMatcher::DescribeTo(os);
-    *os << "), effect0 (";
-    effect0_matcher_.DescribeTo(os);
-    *os << ") and effect1 (";
-    effect1_matcher_.DescribeTo(os);
-    *os << ")";
-  }
-
-  bool MatchAndExplain(Node* node, MatchResultListener* listener) const final {
-    if (!NodeMatcher::MatchAndExplain(node, listener)) return false;
-
-    Node* effect0 = NodeProperties::GetEffectInput(node, 0);
-    Node* effect1 = NodeProperties::GetEffectInput(node, 1);
-
-    {
-      // Try matching in the reverse order first.
-      StringMatchResultListener value_listener;
-      if (effect0_matcher_.MatchAndExplain(effect1, &value_listener) &&
-          effect1_matcher_.MatchAndExplain(effect0, &value_listener)) {
-        return true;
-      }
-    }
-
-    return PrintMatchAndExplain(effect0, "effect0", effect0_matcher_,
-                                listener) &&
-           PrintMatchAndExplain(effect1, "effect1", effect1_matcher_, listener);
-  }
-
- private:
-  const Matcher<Node*> effect0_matcher_;
-  const Matcher<Node*> effect1_matcher_;
-};
-
-
 class IsProjectionMatcher final : public NodeMatcher {
  public:
   IsProjectionMatcher(const Matcher<size_t>& index_matcher,
@@ -843,6 +800,40 @@ class IsReferenceEqualMatcher final : public NodeMatcher {
   const Matcher<Node*> rhs_matcher_;
 };
 
+class IsSpeculativeBinopMatcher final : public NodeMatcher {
+ public:
+  IsSpeculativeBinopMatcher(
+      IrOpcode::Value opcode,
+      const Matcher<BinaryOperationHints::Hint>& hint_matcher,
+      const Matcher<Node*>& lhs_matcher, const Matcher<Node*>& rhs_matcher,
+      const Matcher<Node*>& effect_matcher,
+      const Matcher<Node*>& control_matcher)
+      : NodeMatcher(opcode),
+        lhs_matcher_(lhs_matcher),
+        rhs_matcher_(rhs_matcher),
+        effect_matcher_(effect_matcher),
+        control_matcher_(control_matcher) {}
+
+  bool MatchAndExplain(Node* node, MatchResultListener* listener) const final {
+    return (NodeMatcher::MatchAndExplain(node, listener) &&
+            // TODO(bmeurer): The type parameter is currently ignored.
+            PrintMatchAndExplain(NodeProperties::GetValueInput(node, 0), "lhs",
+                                 lhs_matcher_, listener) &&
+            PrintMatchAndExplain(NodeProperties::GetValueInput(node, 1), "rhs",
+                                 rhs_matcher_, listener) &&
+            PrintMatchAndExplain(NodeProperties::GetEffectInput(node), "effect",
+                                 effect_matcher_, listener) &&
+            PrintMatchAndExplain(NodeProperties::GetControlInput(node),
+                                 "control", control_matcher_, listener));
+  }
+
+ private:
+  const Matcher<Type*> type_matcher_;
+  const Matcher<Node*> lhs_matcher_;
+  const Matcher<Node*> rhs_matcher_;
+  const Matcher<Node*> effect_matcher_;
+  const Matcher<Node*> control_matcher_;
+};
 
 class IsAllocateMatcher final : public NodeMatcher {
  public:
@@ -1352,12 +1343,12 @@ class IsStackSlotMatcher final : public NodeMatcher {
   const Matcher<MachineRepresentation> rep_matcher_;
 };
 
-class IsGuardMatcher final : public NodeMatcher {
+class IsTypeGuardMatcher final : public NodeMatcher {
  public:
-  IsGuardMatcher(const Matcher<Type*>& type_matcher,
-                 const Matcher<Node*>& value_matcher,
-                 const Matcher<Node*>& control_matcher)
-      : NodeMatcher(IrOpcode::kGuard),
+  IsTypeGuardMatcher(const Matcher<Type*>& type_matcher,
+                     const Matcher<Node*>& value_matcher,
+                     const Matcher<Node*>& control_matcher)
+      : NodeMatcher(IrOpcode::kTypeGuard),
         type_matcher_(type_matcher),
         value_matcher_(value_matcher),
         control_matcher_(control_matcher) {}
@@ -1818,12 +1809,6 @@ Matcher<Node*> IsEffectPhi(const Matcher<Node*>& effect0_matcher,
 }
 
 
-Matcher<Node*> IsEffectSet(const Matcher<Node*>& effect0_matcher,
-                           const Matcher<Node*>& effect1_matcher) {
-  return MakeMatcher(new IsEffectSetMatcher(effect0_matcher, effect1_matcher));
-}
-
-
 Matcher<Node*> IsProjection(const Matcher<size_t>& index_matcher,
                             const Matcher<Node*>& base_matcher) {
   return MakeMatcher(new IsProjectionMatcher(index_matcher, base_matcher));
@@ -2064,11 +2049,11 @@ Matcher<Node*> IsTailCall(
                                            effect_matcher, control_matcher));
 }
 
-Matcher<Node*> IsGuard(const Matcher<Type*>& type_matcher,
-                       const Matcher<Node*>& value_matcher,
-                       const Matcher<Node*>& control_matcher) {
+Matcher<Node*> IsTypeGuard(const Matcher<Type*>& type_matcher,
+                           const Matcher<Node*>& value_matcher,
+                           const Matcher<Node*>& control_matcher) {
   return MakeMatcher(
-      new IsGuardMatcher(type_matcher, value_matcher, control_matcher));
+      new IsTypeGuardMatcher(type_matcher, value_matcher, control_matcher));
 }
 
 Matcher<Node*> IsReferenceEqual(const Matcher<Type*>& type_matcher,
@@ -2078,6 +2063,25 @@ Matcher<Node*> IsReferenceEqual(const Matcher<Type*>& type_matcher,
       new IsReferenceEqualMatcher(type_matcher, lhs_matcher, rhs_matcher));
 }
 
+Matcher<Node*> IsSpeculativeNumberAdd(
+    const Matcher<BinaryOperationHints::Hint>& hint_matcher,
+    const Matcher<Node*>& lhs_matcher, const Matcher<Node*>& rhs_matcher,
+    const Matcher<Node*>& effect_matcher,
+    const Matcher<Node*>& control_matcher) {
+  return MakeMatcher(new IsSpeculativeBinopMatcher(
+      IrOpcode::kSpeculativeNumberAdd, hint_matcher, lhs_matcher, rhs_matcher,
+      effect_matcher, control_matcher));
+}
+
+Matcher<Node*> IsSpeculativeNumberSubtract(
+    const Matcher<BinaryOperationHints::Hint>& hint_matcher,
+    const Matcher<Node*>& lhs_matcher, const Matcher<Node*>& rhs_matcher,
+    const Matcher<Node*>& effect_matcher,
+    const Matcher<Node*>& control_matcher) {
+  return MakeMatcher(new IsSpeculativeBinopMatcher(
+      IrOpcode::kSpeculativeNumberSubtract, hint_matcher, lhs_matcher,
+      rhs_matcher, effect_matcher, control_matcher));
+}
 
 Matcher<Node*> IsAllocate(const Matcher<Node*>& size_matcher,
                           const Matcher<Node*>& effect_matcher,
@@ -2204,6 +2208,10 @@ Matcher<Node*> IsLoadFramePointer() {
   return MakeMatcher(new NodeMatcher(IrOpcode::kLoadFramePointer));
 }
 
+Matcher<Node*> IsLoadParentFramePointer() {
+  return MakeMatcher(new NodeMatcher(IrOpcode::kLoadParentFramePointer));
+}
+
 #define IS_QUADOP_MATCHER(Name)                                               \
   Matcher<Node*> Is##Name(                                                    \
       const Matcher<Node*>& a_matcher, const Matcher<Node*>& b_matcher,       \
@@ -2242,6 +2250,7 @@ IS_BINOP_MATCHER(NumberShiftLeft)
 IS_BINOP_MATCHER(NumberShiftRight)
 IS_BINOP_MATCHER(NumberShiftRightLogical)
 IS_BINOP_MATCHER(NumberImul)
+IS_BINOP_MATCHER(NumberAtan2)
 IS_BINOP_MATCHER(Word32And)
 IS_BINOP_MATCHER(Word32Or)
 IS_BINOP_MATCHER(Word32Xor)
@@ -2284,6 +2293,7 @@ IS_BINOP_MATCHER(Float64InsertHighWord32)
     return MakeMatcher(new IsUnopMatcher(IrOpcode::k##Name, input_matcher)); \
   }
 IS_UNOP_MATCHER(BooleanNot)
+IS_UNOP_MATCHER(TruncateFloat64ToWord32)
 IS_UNOP_MATCHER(ChangeFloat64ToInt32)
 IS_UNOP_MATCHER(ChangeFloat64ToUint32)
 IS_UNOP_MATCHER(ChangeInt32ToFloat64)
@@ -2291,7 +2301,6 @@ IS_UNOP_MATCHER(ChangeInt32ToInt64)
 IS_UNOP_MATCHER(ChangeUint32ToFloat64)
 IS_UNOP_MATCHER(ChangeUint32ToUint64)
 IS_UNOP_MATCHER(TruncateFloat64ToFloat32)
-IS_UNOP_MATCHER(TruncateFloat64ToInt32)
 IS_UNOP_MATCHER(TruncateInt64ToInt32)
 IS_UNOP_MATCHER(Float32Abs)
 IS_UNOP_MATCHER(Float64Abs)
@@ -2301,10 +2310,32 @@ IS_UNOP_MATCHER(Float64RoundTruncate)
 IS_UNOP_MATCHER(Float64RoundTiesAway)
 IS_UNOP_MATCHER(Float64ExtractLowWord32)
 IS_UNOP_MATCHER(Float64ExtractHighWord32)
+IS_UNOP_MATCHER(NumberAbs)
+IS_UNOP_MATCHER(NumberAtan)
+IS_UNOP_MATCHER(NumberAtanh)
+IS_UNOP_MATCHER(NumberCeil)
+IS_UNOP_MATCHER(NumberClz32)
+IS_UNOP_MATCHER(NumberCbrt)
+IS_UNOP_MATCHER(NumberCos)
+IS_UNOP_MATCHER(NumberExp)
+IS_UNOP_MATCHER(NumberExpm1)
+IS_UNOP_MATCHER(NumberFloor)
+IS_UNOP_MATCHER(NumberFround)
+IS_UNOP_MATCHER(NumberLog)
+IS_UNOP_MATCHER(NumberLog1p)
+IS_UNOP_MATCHER(NumberLog10)
+IS_UNOP_MATCHER(NumberLog2)
+IS_UNOP_MATCHER(NumberRound)
+IS_UNOP_MATCHER(NumberSin)
+IS_UNOP_MATCHER(NumberSqrt)
+IS_UNOP_MATCHER(NumberTan)
+IS_UNOP_MATCHER(NumberTrunc)
 IS_UNOP_MATCHER(NumberToInt32)
 IS_UNOP_MATCHER(NumberToUint32)
+IS_UNOP_MATCHER(PlainPrimitiveToNumber)
 IS_UNOP_MATCHER(ObjectIsReceiver)
 IS_UNOP_MATCHER(ObjectIsSmi)
+IS_UNOP_MATCHER(StringFromCharCode)
 IS_UNOP_MATCHER(Word32Clz)
 IS_UNOP_MATCHER(Word32Ctz)
 IS_UNOP_MATCHER(Word32Popcnt)

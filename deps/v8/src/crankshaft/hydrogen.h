@@ -7,12 +7,14 @@
 
 #include "src/accessors.h"
 #include "src/allocation.h"
+#include "src/ast/ast-type-bounds.h"
 #include "src/ast/ast.h"
 #include "src/ast/scopes.h"
 #include "src/bailout-reason.h"
 #include "src/compiler.h"
 #include "src/crankshaft/compilation-phase.h"
 #include "src/crankshaft/hydrogen-instructions.h"
+#include "src/parsing/parser.h"
 #include "src/zone.h"
 
 namespace v8 {
@@ -30,6 +32,28 @@ class LAllocator;
 class LChunk;
 class LiveRange;
 
+class HCompilationJob final : public CompilationJob {
+ public:
+  explicit HCompilationJob(Handle<JSFunction> function)
+      : CompilationJob(&info_, "Crankshaft"),
+        zone_(function->GetIsolate()->allocator()),
+        parse_info_(&zone_, function),
+        info_(&parse_info_, function),
+        graph_(nullptr),
+        chunk_(nullptr) {}
+
+ protected:
+  virtual Status CreateGraphImpl();
+  virtual Status OptimizeGraphImpl();
+  virtual Status GenerateCodeImpl();
+
+ private:
+  Zone zone_;
+  ParseInfo parse_info_;
+  CompilationInfo info_;
+  HGraph* graph_;
+  LChunk* chunk_;
+};
 
 class HBasicBlock final : public ZoneObject {
  public:
@@ -293,6 +317,11 @@ class HLoopInformation final : public ZoneObject {
   HStackCheck* stack_check_;
 };
 
+struct HInlinedFunctionInfo {
+  explicit HInlinedFunctionInfo(int start_position)
+      : start_position(start_position) {}
+  int start_position;
+};
 
 class HGraph final : public ZoneObject {
  public:
@@ -392,13 +421,11 @@ class HGraph final : public ZoneObject {
   }
   int maximum_environment_size() { return maximum_environment_size_; }
 
-  bool use_optimistic_licm() {
-    return use_optimistic_licm_;
-  }
+  bool allow_code_motion() const { return allow_code_motion_; }
+  void set_allow_code_motion(bool value) { allow_code_motion_ = value; }
 
-  void set_use_optimistic_licm(bool value) {
-    use_optimistic_licm_ = value;
-  }
+  bool use_optimistic_licm() const { return use_optimistic_licm_; }
+  void set_use_optimistic_licm(bool value) { use_optimistic_licm_ = value; }
 
   void MarkDependsOnEmptyArrayProtoElements() {
     // Add map dependency if not already added.
@@ -444,6 +471,10 @@ class HGraph final : public ZoneObject {
   // the corresponding script.
   int SourcePositionToScriptPosition(SourcePosition position);
 
+  ZoneVector<HInlinedFunctionInfo>& inlined_function_infos() {
+    return inlined_function_infos_;
+  }
+
  private:
   HConstant* ReinsertConstantIfNecessary(HConstant* constant);
   HConstant* GetConstant(SetOncePointer<HConstant>* pointer,
@@ -480,12 +511,15 @@ class HGraph final : public ZoneObject {
   CallInterfaceDescriptor descriptor_;
   Zone* zone_;
 
+  bool allow_code_motion_;
   bool use_optimistic_licm_;
   bool depends_on_empty_array_proto_elements_;
   int type_change_checksum_;
   int maximum_environment_size_;
   int no_side_effects_scope_count_;
   bool disallow_adding_new_values_;
+
+  ZoneVector<HInlinedFunctionInfo> inlined_function_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(HGraph);
 };
@@ -1299,7 +1333,7 @@ class HGraphBuilder {
             class P7, class P8, class P9>
   HInstruction* AddUncasted(P1 p1, P2 p2, P3 p3, P4 p4, P5 p5, P6 p6, P7 p7,
                             P8 p8, P9 p9) {
-    return AddInstruction(NewUncasted<I>(p1, p2, p3, p4, p5, p6, p7, p8, p8));
+    return AddInstruction(NewUncasted<I>(p1, p2, p3, p4, p5, p6, p7, p8, p9));
   }
 
   template <class I, class P1, class P2, class P3, class P4, class P5, class P6,
@@ -1768,18 +1802,6 @@ class HGraphBuilder {
     HAllocate* AllocateArray(HValue* capacity,
                              HValue* length_field,
                              FillMode fill_mode = FILL_WITH_HOLE);
-    // Use these allocators when capacity could be unknown at compile time
-    // but its limit is known. For constant |capacity| the value of
-    // |capacity_upper_bound| is ignored and the actual |capacity|
-    // value is used as an upper bound.
-    HAllocate* AllocateArray(HValue* capacity,
-                             int capacity_upper_bound,
-                             HValue* length_field,
-                             FillMode fill_mode = FILL_WITH_HOLE);
-    HAllocate* AllocateArray(HValue* capacity,
-                             HConstant* capacity_upper_bound,
-                             HValue* length_field,
-                             FillMode fill_mode = FILL_WITH_HOLE);
     HValue* GetElementsLocation() { return elements_location_; }
     HValue* EmitMapCode();
 
@@ -1928,6 +1950,9 @@ class HGraphBuilder {
 
   SourcePosition source_position() { return position_; }
   void set_source_position(SourcePosition position) { position_ = position; }
+
+  int TraceInlinedFunction(Handle<SharedFunctionInfo> shared,
+                           SourcePosition position);
 
   HValue* BuildAllocateEmptyArrayBuffer(HValue* byte_length);
   template <typename ViewClass>
@@ -2170,6 +2195,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   void VisitDeclarations(ZoneList<Declaration*>* declarations) override;
 
+  AstTypeBounds* bounds() { return &bounds_; }
+
   void* operator new(size_t size, Zone* zone) { return zone->New(size); }
   void operator delete(void* pointer, Zone* zone) { }
   void operator delete(void* pointer) { }
@@ -2214,17 +2241,20 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   TestContext* inlined_test_context() const {
     return function_state()->test_context();
   }
+  Handle<JSFunction> current_closure() const {
+    return current_info()->closure();
+  }
   Handle<SharedFunctionInfo> current_shared_info() const {
     return current_info()->shared_info();
   }
   TypeFeedbackVector* current_feedback_vector() const {
-    return current_shared_info()->feedback_vector();
+    return current_closure()->feedback_vector();
   }
   void ClearInlinedTestContext() {
     function_state()->ClearInlinedTestContext();
   }
   LanguageMode function_language_mode() {
-    return function_state()->compilation_info()->language_mode();
+    return function_state()->compilation_info()->parse_info()->language_mode();
   }
 
 #define FOR_EACH_HYDROGEN_INTRINSIC(F) \
@@ -2237,9 +2267,6 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   F(NewObject)                         \
   F(ValueOf)                           \
   F(StringCharFromCode)                \
-  F(StringCharAt)                      \
-  F(OneByteSeqStringSetChar)           \
-  F(TwoByteSeqStringSetChar)           \
   F(ToInteger)                         \
   F(ToName)                            \
   F(ToObject)                          \
@@ -2259,7 +2286,6 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   F(RegExpSource)                      \
   F(NumberToString)                    \
   F(DebugIsActive)                     \
-  F(GetOrdinaryHasInstance)            \
   /* Typed Arrays */                   \
   F(TypedArrayInitialize)              \
   F(MaxSmi)                            \
@@ -2270,10 +2296,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   /* ArrayBuffer */                    \
   F(ArrayBufferGetByteLength)          \
   /* Maths */                          \
-  F(ConstructDouble)                   \
   F(DoubleHi)                          \
   F(DoubleLo)                          \
-  F(MathLogRT)                         \
   /* ES6 Collections */                \
   F(MapClear)                          \
   F(MapInitialize)                     \
@@ -2336,21 +2360,19 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   void Bind(Variable* var, HValue* value) { environment()->Bind(var, value); }
   bool IsEligibleForEnvironmentLivenessAnalysis(Variable* var,
                                                 int index,
-                                                HValue* value,
                                                 HEnvironment* env) {
     if (!FLAG_analyze_environment_liveness) return false;
     // |this| and |arguments| are always live; zapping parameters isn't
     // safe because function.arguments can inspect them at any time.
     return !var->is_this() &&
            !var->is_arguments() &&
-           !value->IsArgumentsObject() &&
            env->is_local_index(index);
   }
   void BindIfLive(Variable* var, HValue* value) {
     HEnvironment* env = environment();
     int index = env->IndexFor(var);
     env->Bind(index, value);
-    if (IsEligibleForEnvironmentLivenessAnalysis(var, index, value, env)) {
+    if (IsEligibleForEnvironmentLivenessAnalysis(var, index, env)) {
       HEnvironmentMarker* bind =
           Add<HEnvironmentMarker>(HEnvironmentMarker::BIND, index);
       USE(bind);
@@ -2362,8 +2384,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   HValue* LookupAndMakeLive(Variable* var) {
     HEnvironment* env = environment();
     int index = env->IndexFor(var);
-    HValue* value = env->Lookup(index);
-    if (IsEligibleForEnvironmentLivenessAnalysis(var, index, value, env)) {
+    if (IsEligibleForEnvironmentLivenessAnalysis(var, index, env)) {
       HEnvironmentMarker* lookup =
           Add<HEnvironmentMarker>(HEnvironmentMarker::LOOKUP, index);
       USE(lookup);
@@ -2371,7 +2392,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
       lookup->set_closure(env->closure());
 #endif
     }
-    return value;
+    return env->Lookup(index);
   }
 
   // The value of the arguments object is allowed in some but not most value
@@ -2451,8 +2472,10 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
                        HValue* implicit_return_value);
   bool TryInlineIndirectCall(Handle<JSFunction> function, Call* expr,
                              int arguments_count);
-  bool TryInlineBuiltinMethodCall(Call* expr, Handle<JSFunction> function,
-                                  Handle<Map> receiver_map,
+  bool TryInlineBuiltinGetterCall(Handle<JSFunction> function,
+                                  Handle<Map> receiver_map, BailoutId ast_id);
+  bool TryInlineBuiltinMethodCall(Handle<JSFunction> function,
+                                  Handle<Map> receiver_map, BailoutId ast_id,
                                   int args_count_no_receiver);
   bool TryInlineBuiltinFunctionCall(Call* expr);
   enum ApiCallType {
@@ -2591,20 +2614,6 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
         } else {
           *access = HObjectAccess::ForMapAndOffset(map_, offset);
         }
-        return true;
-      }
-      return false;
-    }
-
-    bool IsJSArrayBufferViewFieldAccessor() {
-      int offset;  // unused
-      return Accessors::IsJSArrayBufferViewFieldAccessor(map_, name_, &offset);
-    }
-
-    bool GetJSArrayBufferViewFieldAccess(HObjectAccess* access) {
-      int offset;
-      if (Accessors::IsJSArrayBufferViewFieldAccessor(map_, name_, &offset)) {
-        *access = HObjectAccess::ForMapAndOffset(map_, offset);
         return true;
       }
       return false;
@@ -2902,6 +2911,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   bool inline_bailout_;
 
   HOsrBuilder* osr_;
+
+  AstTypeBounds bounds_;
 
   friend class FunctionState;  // Pushes and pops the state stack.
   friend class AstContext;  // Pushes and pops the AST context stack.

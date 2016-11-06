@@ -139,6 +139,8 @@ class InstructionSelector final {
   // TODO(sigurds) This should take a CpuFeatures argument.
   static MachineOperatorBuilder::Flags SupportedMachineOperatorFlags();
 
+  static MachineOperatorBuilder::AlignmentRequirements AlignmentRequirements();
+
   // ===========================================================================
   // ============ Architecture-independent graph covering methods. =============
   // ===========================================================================
@@ -242,12 +244,15 @@ class InstructionSelector final {
   // Visit the node and generate code, if any.
   void VisitNode(Node* node);
 
+  // Visit the node and generate code for IEEE 754 functions.
+  void VisitFloat64Ieee754Binop(Node*, InstructionCode code);
+  void VisitFloat64Ieee754Unop(Node*, InstructionCode code);
+
 #define DECLARE_GENERATOR(x) void Visit##x(Node* node);
   MACHINE_OP_LIST(DECLARE_GENERATOR)
 #undef DECLARE_GENERATOR
 
   void VisitFinishRegion(Node* node);
-  void VisitGuard(Node* node);
   void VisitParameter(Node* node);
   void VisitIfException(Node* node);
   void VisitOsrValue(Node* node);
@@ -267,6 +272,9 @@ class InstructionSelector final {
 
   void EmitPrepareArguments(ZoneVector<compiler::PushParameter>* arguments,
                             const CallDescriptor* descriptor, Node* node);
+
+  void EmitIdentity(Node* node);
+  bool CanProduceSignalingNaN(Node* node);
 
   // ===========================================================================
 

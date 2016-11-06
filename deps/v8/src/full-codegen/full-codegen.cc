@@ -28,11 +28,14 @@ namespace internal {
 bool FullCodeGenerator::MakeCode(CompilationInfo* info) {
   Isolate* isolate = info->isolate();
 
+  RuntimeCallTimerScope runtimeTimer(isolate,
+                                     &RuntimeCallStats::CompileFullCode);
   TimerEventScope<TimerEventCompileFullCode> timer(info->isolate());
   TRACE_EVENT0("v8", "V8.CompileFullCode");
 
   Handle<Script> script = info->script();
-  if (!script->IsUndefined() && !script->source()->IsUndefined()) {
+  if (!script->IsUndefined(isolate) &&
+      !script->source()->IsUndefined(isolate)) {
     int len = String::cast(script->source())->length();
     isolate->counters()->total_full_codegen_source_size()->Increment(len);
   }
@@ -144,13 +147,8 @@ int FullCodeGenerator::NewHandlerTableEntry() {
 
 bool FullCodeGenerator::MustCreateObjectLiteralWithRuntime(
     ObjectLiteral* expr) const {
-  // FastCloneShallowObjectStub doesn't copy elements, and object literals don't
-  // support copy-on-write (COW) elements for now.
-  // TODO(mvstanton): make object literals support COW elements.
-  return masm()->serializer_enabled() || !expr->fast_elements() ||
-         !expr->has_shallow_properties() ||
-         expr->properties_count() >
-             FastCloneShallowObjectStub::kMaximumClonedProperties;
+  return masm()->serializer_enabled() ||
+         !FastCloneShallowObjectStub::IsSupported(expr);
 }
 
 
@@ -167,18 +165,21 @@ void FullCodeGenerator::Initialize() {
   masm_->set_predictable_code_size(true);
 }
 
-
-void FullCodeGenerator::PrepareForBailout(Expression* node, State state) {
+void FullCodeGenerator::PrepareForBailout(Expression* node,
+                                          BailoutState state) {
   PrepareForBailoutForId(node->id(), state);
 }
 
-
-void FullCodeGenerator::CallLoadIC(TypeofMode typeof_mode,
-                                   TypeFeedbackId id) {
-  Handle<Code> ic = CodeFactory::LoadIC(isolate(), typeof_mode).code();
+void FullCodeGenerator::CallLoadIC(TypeFeedbackId id) {
+  Handle<Code> ic = CodeFactory::LoadIC(isolate()).code();
   CallIC(ic, id);
 }
 
+void FullCodeGenerator::CallLoadGlobalIC(TypeofMode typeof_mode,
+                                         TypeFeedbackId id) {
+  Handle<Code> ic = CodeFactory::LoadGlobalIC(isolate(), typeof_mode).code();
+  CallIC(ic, id);
+}
 
 void FullCodeGenerator::CallStoreIC(TypeFeedbackId id) {
   Handle<Code> ic = CodeFactory::StoreIC(isolate(), language_mode()).code();
@@ -191,9 +192,9 @@ void FullCodeGenerator::RecordJSReturnSite(Call* call) {
   // if the function was inlined, i.e., this is the return address in the
   // inlined function's frame.
   //
-  // The state is ignored.  We defensively set it to TOS_REG, which is the
-  // real state of the unoptimized code at the return site.
-  PrepareForBailoutForId(call->ReturnId(), TOS_REG);
+  // The bailout state is ignored.  We defensively set it to TOS_REGISTER, which
+  // is the real state of the unoptimized code at the return site.
+  PrepareForBailoutForId(call->ReturnId(), BailoutState::TOS_REGISTER);
 #ifdef DEBUG
   // In debug builds, mark the return so we can verify that this function
   // was called.
@@ -202,13 +203,13 @@ void FullCodeGenerator::RecordJSReturnSite(Call* call) {
 #endif
 }
 
-
-void FullCodeGenerator::PrepareForBailoutForId(BailoutId id, State state) {
+void FullCodeGenerator::PrepareForBailoutForId(BailoutId id,
+                                               BailoutState state) {
   // There's no need to prepare this code for bailouts from already optimized
   // code or code that can't be optimized.
   if (!info_->HasDeoptimizationSupport()) return;
   unsigned pc_and_state =
-      StateField::encode(state) | PcField::encode(masm_->pc_offset());
+      BailoutStateField::encode(state) | PcField::encode(masm_->pc_offset());
   DCHECK(Smi::IsValid(pc_and_state));
 #ifdef DEBUG
   for (int i = 0; i < bailout_entries_.length(); ++i) {
@@ -447,10 +448,7 @@ void FullCodeGenerator::VisitSloppyBlockFunctionStatement(
 
 
 int FullCodeGenerator::DeclareGlobalsFlags() {
-  DCHECK(DeclareGlobalsLanguageMode::is_valid(language_mode()));
-  return DeclareGlobalsEvalFlag::encode(is_eval()) |
-         DeclareGlobalsNativeFlag::encode(is_native()) |
-         DeclareGlobalsLanguageMode::encode(language_mode());
+  return info_->GetDeclareGlobalsFlags();
 }
 
 void FullCodeGenerator::PushOperand(Handle<Object> handle) {
@@ -609,19 +607,22 @@ void FullCodeGenerator::EmitRegExpConstructResult(CallRuntime* expr) {
   EmitIntrinsicAsStubCall(expr, CodeFactory::RegExpConstructResult(isolate()));
 }
 
-
-bool RecordStatementPosition(MacroAssembler* masm, int pos) {
-  if (pos == RelocInfo::kNoPosition) return false;
-  masm->positions_recorder()->RecordStatementPosition(pos);
-  masm->positions_recorder()->RecordPosition(pos);
-  return masm->positions_recorder()->WriteRecordedPositions();
+void FullCodeGenerator::EmitHasProperty() {
+  Callable callable = CodeFactory::HasProperty(isolate());
+  PopOperand(callable.descriptor().GetRegisterParameter(1));
+  PopOperand(callable.descriptor().GetRegisterParameter(0));
+  __ Call(callable.code(), RelocInfo::CODE_TARGET);
+  RestoreContext();
 }
 
+void RecordStatementPosition(MacroAssembler* masm, int pos) {
+  if (pos == RelocInfo::kNoPosition) return;
+  masm->positions_recorder()->RecordStatementPosition(pos);
+}
 
-bool RecordPosition(MacroAssembler* masm, int pos) {
-  if (pos == RelocInfo::kNoPosition) return false;
+void RecordPosition(MacroAssembler* masm, int pos) {
+  if (pos == RelocInfo::kNoPosition) return;
   masm->positions_recorder()->RecordPosition(pos);
-  return masm->positions_recorder()->WriteRecordedPositions();
 }
 
 
@@ -645,28 +646,23 @@ void FullCodeGenerator::SetReturnPosition(FunctionLiteral* fun) {
 void FullCodeGenerator::SetStatementPosition(
     Statement* stmt, FullCodeGenerator::InsertBreak insert_break) {
   if (stmt->position() == RelocInfo::kNoPosition) return;
-  bool recorded = RecordStatementPosition(masm_, stmt->position());
-  if (recorded && insert_break == INSERT_BREAK && info_->is_debug() &&
+  RecordStatementPosition(masm_, stmt->position());
+  if (insert_break == INSERT_BREAK && info_->is_debug() &&
       !stmt->IsDebuggerStatement()) {
     DebugCodegen::GenerateSlot(masm_, RelocInfo::DEBUG_BREAK_SLOT_AT_POSITION);
   }
 }
 
-
-void FullCodeGenerator::SetExpressionPosition(
-    Expression* expr, FullCodeGenerator::InsertBreak insert_break) {
+void FullCodeGenerator::SetExpressionPosition(Expression* expr) {
   if (expr->position() == RelocInfo::kNoPosition) return;
-  bool recorded = RecordPosition(masm_, expr->position());
-  if (recorded && insert_break == INSERT_BREAK && info_->is_debug()) {
-    DebugCodegen::GenerateSlot(masm_, RelocInfo::DEBUG_BREAK_SLOT_AT_POSITION);
-  }
+  RecordPosition(masm_, expr->position());
 }
 
 
 void FullCodeGenerator::SetExpressionAsStatementPosition(Expression* expr) {
   if (expr->position() == RelocInfo::kNoPosition) return;
-  bool recorded = RecordStatementPosition(masm_, expr->position());
-  if (recorded && info_->is_debug()) {
+  RecordStatementPosition(masm_, expr->position());
+  if (info_->is_debug()) {
     DebugCodegen::GenerateSlot(masm_, RelocInfo::DEBUG_BREAK_SLOT_AT_POSITION);
   }
 }
@@ -688,32 +684,15 @@ void FullCodeGenerator::SetCallPosition(Expression* expr,
 void FullCodeGenerator::VisitSuperPropertyReference(
     SuperPropertyReference* super) {
   __ CallRuntime(Runtime::kThrowUnsupportedSuperError);
+  // Even though this expression doesn't produce a value, we need to simulate
+  // plugging of the value context to ensure stack depth tracking is in sync.
+  if (context()->IsStackValue()) OperandStackDepthIncrement(1);
 }
 
 
 void FullCodeGenerator::VisitSuperCallReference(SuperCallReference* super) {
-  __ CallRuntime(Runtime::kThrowUnsupportedSuperError);
-}
-
-
-void FullCodeGenerator::EmitGeneratorNext(CallRuntime* expr) {
-  ZoneList<Expression*>* args = expr->arguments();
-  DCHECK(args->length() == 2);
-  EmitGeneratorResume(args->at(0), args->at(1), JSGeneratorObject::NEXT);
-}
-
-
-void FullCodeGenerator::EmitGeneratorReturn(CallRuntime* expr) {
-  ZoneList<Expression*>* args = expr->arguments();
-  DCHECK(args->length() == 2);
-  EmitGeneratorResume(args->at(0), args->at(1), JSGeneratorObject::RETURN);
-}
-
-
-void FullCodeGenerator::EmitGeneratorThrow(CallRuntime* expr) {
-  ZoneList<Expression*>* args = expr->arguments();
-  DCHECK(args->length() == 2);
-  EmitGeneratorResume(args->at(0), args->at(1), JSGeneratorObject::THROW);
+  // Handled by VisitCall
+  UNREACHABLE();
 }
 
 
@@ -773,7 +752,7 @@ void FullCodeGenerator::VisitLogicalExpression(BinaryOperation* expr) {
     } else {
       VisitForControl(left, test->true_label(), &eval_right, &eval_right);
     }
-    PrepareForBailoutForId(right_id, NO_REGISTERS);
+    PrepareForBailoutForId(right_id, BailoutState::NO_REGISTERS);
     __ bind(&eval_right);
 
   } else if (context()->IsAccumulatorValue()) {
@@ -792,7 +771,7 @@ void FullCodeGenerator::VisitLogicalExpression(BinaryOperation* expr) {
     __ jmp(&done);
     __ bind(&discard);
     __ Drop(1);
-    PrepareForBailoutForId(right_id, NO_REGISTERS);
+    PrepareForBailoutForId(right_id, BailoutState::NO_REGISTERS);
 
   } else if (context()->IsStackValue()) {
     VisitForAccumulatorValue(left);
@@ -807,7 +786,7 @@ void FullCodeGenerator::VisitLogicalExpression(BinaryOperation* expr) {
     }
     __ bind(&discard);
     __ Drop(1);
-    PrepareForBailoutForId(right_id, NO_REGISTERS);
+    PrepareForBailoutForId(right_id, BailoutState::NO_REGISTERS);
 
   } else {
     DCHECK(context()->IsEffect());
@@ -817,7 +796,7 @@ void FullCodeGenerator::VisitLogicalExpression(BinaryOperation* expr) {
     } else {
       VisitForControl(left, &done, &eval_right, &eval_right);
     }
-    PrepareForBailoutForId(right_id, NO_REGISTERS);
+    PrepareForBailoutForId(right_id, BailoutState::NO_REGISTERS);
     __ bind(&eval_right);
   }
 
@@ -843,6 +822,41 @@ void FullCodeGenerator::VisitArithmeticExpression(BinaryOperation* expr) {
   }
 }
 
+void FullCodeGenerator::VisitProperty(Property* expr) {
+  Comment cmnt(masm_, "[ Property");
+  SetExpressionPosition(expr);
+
+  Expression* key = expr->key();
+
+  if (key->IsPropertyName()) {
+    if (!expr->IsSuperAccess()) {
+      VisitForAccumulatorValue(expr->obj());
+      __ Move(LoadDescriptor::ReceiverRegister(), result_register());
+      EmitNamedPropertyLoad(expr);
+    } else {
+      VisitForStackValue(expr->obj()->AsSuperPropertyReference()->this_var());
+      VisitForStackValue(
+          expr->obj()->AsSuperPropertyReference()->home_object());
+      EmitNamedSuperPropertyLoad(expr);
+    }
+  } else {
+    if (!expr->IsSuperAccess()) {
+      VisitForStackValue(expr->obj());
+      VisitForAccumulatorValue(expr->key());
+      __ Move(LoadDescriptor::NameRegister(), result_register());
+      PopOperand(LoadDescriptor::ReceiverRegister());
+      EmitKeyedPropertyLoad(expr);
+    } else {
+      VisitForStackValue(expr->obj()->AsSuperPropertyReference()->this_var());
+      VisitForStackValue(
+          expr->obj()->AsSuperPropertyReference()->home_object());
+      VisitForStackValue(expr->key());
+      EmitKeyedSuperPropertyLoad(expr);
+    }
+  }
+  PrepareForBailoutForId(expr->LoadId(), BailoutState::TOS_REGISTER);
+  context()->Plug(result_register());
+}
 
 void FullCodeGenerator::VisitForTypeofValue(Expression* expr) {
   VariableProxy* proxy = expr->AsVariableProxy();
@@ -852,7 +866,7 @@ void FullCodeGenerator::VisitForTypeofValue(Expression* expr) {
   if (proxy != NULL && (proxy->var()->IsUnallocatedOrGlobalSlot() ||
                         proxy->var()->IsLookupSlot())) {
     EmitVariableLoad(proxy, INSIDE_TYPEOF);
-    PrepareForBailout(proxy, TOS_REG);
+    PrepareForBailout(proxy, BailoutState::TOS_REGISTER);
   } else {
     // This expression cannot throw a reference error at the top level.
     VisitInDuplicateContext(expr);
@@ -875,7 +889,6 @@ void FullCodeGenerator::VisitBlock(Block* stmt) {
 
 void FullCodeGenerator::VisitDoExpression(DoExpression* expr) {
   Comment cmnt(masm_, "[ Do Expression");
-  NestedStatement nested_block(this);
   SetExpressionPosition(expr);
   VisitBlock(expr->block());
   EmitVariableLoad(expr->result());
@@ -901,24 +914,24 @@ void FullCodeGenerator::VisitIfStatement(IfStatement* stmt) {
 
   if (stmt->HasElseStatement()) {
     VisitForControl(stmt->condition(), &then_part, &else_part, &then_part);
-    PrepareForBailoutForId(stmt->ThenId(), NO_REGISTERS);
+    PrepareForBailoutForId(stmt->ThenId(), BailoutState::NO_REGISTERS);
     __ bind(&then_part);
     Visit(stmt->then_statement());
     __ jmp(&done);
 
-    PrepareForBailoutForId(stmt->ElseId(), NO_REGISTERS);
+    PrepareForBailoutForId(stmt->ElseId(), BailoutState::NO_REGISTERS);
     __ bind(&else_part);
     Visit(stmt->else_statement());
   } else {
     VisitForControl(stmt->condition(), &then_part, &done, &then_part);
-    PrepareForBailoutForId(stmt->ThenId(), NO_REGISTERS);
+    PrepareForBailoutForId(stmt->ThenId(), BailoutState::NO_REGISTERS);
     __ bind(&then_part);
     Visit(stmt->then_statement());
 
-    PrepareForBailoutForId(stmt->ElseId(), NO_REGISTERS);
+    PrepareForBailoutForId(stmt->ElseId(), BailoutState::NO_REGISTERS);
   }
   __ bind(&done);
-  PrepareForBailoutForId(stmt->IfId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->IfId(), BailoutState::NO_REGISTERS);
 }
 
 void FullCodeGenerator::EmitContinue(Statement* target) {
@@ -1019,17 +1032,12 @@ void FullCodeGenerator::EmitUnwindAndReturn() {
 
 void FullCodeGenerator::EmitNewClosure(Handle<SharedFunctionInfo> info,
                                        bool pretenure) {
-  // Use the fast case closure allocation code that allocates in new
-  // space for nested functions that don't need literals cloning. If
-  // we're running with the --always-opt or the --prepare-always-opt
+  // If we're running with the --always-opt or the --prepare-always-opt
   // flag, we need to use the runtime function so that the new function
   // we are creating here gets a chance to have its code optimized and
   // doesn't just get a copy of the existing unoptimized code.
-  if (!FLAG_always_opt &&
-      !FLAG_prepare_always_opt &&
-      !pretenure &&
-      scope()->is_function_scope() &&
-      info->num_literals() == 0) {
+  if (!FLAG_always_opt && !FLAG_prepare_always_opt && !pretenure &&
+      scope()->is_function_scope()) {
     FastNewClosureStub stub(isolate(), info->language_mode(), info->kind());
     __ Move(stub.GetCallInterfaceDescriptor().GetRegisterParameter(0), info);
     __ CallStub(&stub);
@@ -1050,7 +1058,7 @@ void FullCodeGenerator::EmitNamedPropertyLoad(Property* prop) {
   __ Move(LoadDescriptor::NameRegister(), key->value());
   __ Move(LoadDescriptor::SlotRegister(),
           SmiFromSlot(prop->PropertyFeedbackSlot()));
-  CallLoadIC(NOT_INSIDE_TYPEOF);
+  CallLoadIC();
 }
 
 void FullCodeGenerator::EmitNamedSuperPropertyLoad(Property* prop) {
@@ -1082,7 +1090,7 @@ void FullCodeGenerator::EmitPropertyKey(ObjectLiteralProperty* property,
                                         BailoutId bailout_id) {
   VisitForStackValue(property->key());
   CallRuntimeWithOperands(Runtime::kToName);
-  PrepareForBailoutForId(bailout_id, NO_REGISTERS);
+  PrepareForBailoutForId(bailout_id, BailoutState::NO_REGISTERS);
   PushOperand(result_register());
 }
 
@@ -1108,12 +1116,12 @@ void FullCodeGenerator::VisitWithStatement(WithStatement* stmt) {
   Callable callable = CodeFactory::ToObject(isolate());
   __ Move(callable.descriptor().GetRegisterParameter(0), result_register());
   __ Call(callable.code(), RelocInfo::CODE_TARGET);
-  PrepareForBailoutForId(stmt->ToObjectId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ToObjectId(), BailoutState::NO_REGISTERS);
   PushOperand(result_register());
   PushFunctionArgumentForContextAllocation();
   CallRuntimeWithOperands(Runtime::kPushWithContext);
   StoreToFrameField(StandardFrameConstants::kContextOffset, context_register());
-  PrepareForBailoutForId(stmt->EntryId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->EntryId(), BailoutState::NO_REGISTERS);
 
   Scope* saved_scope = scope();
   scope_ = stmt->scope();
@@ -1145,7 +1153,7 @@ void FullCodeGenerator::VisitDoWhileStatement(DoWhileStatement* stmt) {
   // Record the position of the do while condition and make sure it is
   // possible to break on the condition.
   __ bind(loop_statement.continue_label());
-  PrepareForBailoutForId(stmt->ContinueId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ContinueId(), BailoutState::NO_REGISTERS);
 
   // Here is the actual 'while' keyword.
   SetExpressionAsStatementPosition(stmt->cond());
@@ -1155,12 +1163,12 @@ void FullCodeGenerator::VisitDoWhileStatement(DoWhileStatement* stmt) {
                   &book_keeping);
 
   // Check stack before looping.
-  PrepareForBailoutForId(stmt->BackEdgeId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->BackEdgeId(), BailoutState::NO_REGISTERS);
   __ bind(&book_keeping);
   EmitBackEdgeBookkeeping(stmt, &body);
   __ jmp(&body);
 
-  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ExitId(), BailoutState::NO_REGISTERS);
   __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
@@ -1181,7 +1189,7 @@ void FullCodeGenerator::VisitWhileStatement(WhileStatement* stmt) {
                   loop_statement.break_label(),
                   &body);
 
-  PrepareForBailoutForId(stmt->BodyId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->BodyId(), BailoutState::NO_REGISTERS);
   __ bind(&body);
   Visit(stmt->body());
 
@@ -1191,7 +1199,7 @@ void FullCodeGenerator::VisitWhileStatement(WhileStatement* stmt) {
   EmitBackEdgeBookkeeping(stmt, &loop);
   __ jmp(&loop);
 
-  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ExitId(), BailoutState::NO_REGISTERS);
   __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
@@ -1214,11 +1222,11 @@ void FullCodeGenerator::VisitForStatement(ForStatement* stmt) {
   // Emit the test at the bottom of the loop (even if empty).
   __ jmp(&test);
 
-  PrepareForBailoutForId(stmt->BodyId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->BodyId(), BailoutState::NO_REGISTERS);
   __ bind(&body);
   Visit(stmt->body());
 
-  PrepareForBailoutForId(stmt->ContinueId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ContinueId(), BailoutState::NO_REGISTERS);
   __ bind(loop_statement.continue_label());
   if (stmt->next() != NULL) {
     SetStatementPosition(stmt->next());
@@ -1239,7 +1247,7 @@ void FullCodeGenerator::VisitForStatement(ForStatement* stmt) {
     __ jmp(&body);
   }
 
-  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ExitId(), BailoutState::NO_REGISTERS);
   __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
@@ -1252,6 +1260,7 @@ void FullCodeGenerator::VisitForOfStatement(ForOfStatement* stmt) {
   increment_loop_depth();
 
   // var iterator = iterable[Symbol.iterator]();
+  SetExpressionAsStatementPosition(stmt->assign_iterator());
   VisitForEffect(stmt->assign_iterator());
 
   // Loop entry.
@@ -1274,12 +1283,12 @@ void FullCodeGenerator::VisitForOfStatement(ForOfStatement* stmt) {
   Visit(stmt->body());
 
   // Check stack before looping.
-  PrepareForBailoutForId(stmt->BackEdgeId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->BackEdgeId(), BailoutState::NO_REGISTERS);
   EmitBackEdgeBookkeeping(stmt, loop_statement.continue_label());
   __ jmp(loop_statement.continue_label());
 
   // Exit and decrement the loop depth.
-  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->ExitId(), BailoutState::NO_REGISTERS);
   __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
@@ -1423,7 +1432,7 @@ void FullCodeGenerator::VisitDebuggerStatement(DebuggerStatement* stmt) {
   __ DebugBreak();
   // Ignore the return value.
 
-  PrepareForBailoutForId(stmt->DebugBreakId(), NO_REGISTERS);
+  PrepareForBailoutForId(stmt->DebugBreakId(), BailoutState::NO_REGISTERS);
 }
 
 
@@ -1438,7 +1447,7 @@ void FullCodeGenerator::VisitConditional(Conditional* expr) {
   VisitForControl(expr->condition(), &true_case, &false_case, &true_case);
 
   int original_stack_depth = operand_stack_depth_;
-  PrepareForBailoutForId(expr->ThenId(), NO_REGISTERS);
+  PrepareForBailoutForId(expr->ThenId(), BailoutState::NO_REGISTERS);
   __ bind(&true_case);
   SetExpressionPosition(expr->then_expression());
   if (context()->IsTest()) {
@@ -1453,7 +1462,7 @@ void FullCodeGenerator::VisitConditional(Conditional* expr) {
   }
 
   operand_stack_depth_ = original_stack_depth;
-  PrepareForBailoutForId(expr->ElseId(), NO_REGISTERS);
+  PrepareForBailoutForId(expr->ElseId(), BailoutState::NO_REGISTERS);
   __ bind(&false_case);
   SetExpressionPosition(expr->else_expression());
   VisitInDuplicateContext(expr->else_expression());
@@ -1504,7 +1513,7 @@ void FullCodeGenerator::VisitClassLiteral(ClassLiteral* lit) {
     PushOperand(Smi::FromInt(lit->end_position()));
 
     CallRuntimeWithOperands(Runtime::kDefineClass);
-    PrepareForBailoutForId(lit->CreateLiteralId(), TOS_REG);
+    PrepareForBailoutForId(lit->CreateLiteralId(), BailoutState::TOS_REGISTER);
     PushOperand(result_register());
 
     // Load the "prototype" from the constructor.
@@ -1512,14 +1521,15 @@ void FullCodeGenerator::VisitClassLiteral(ClassLiteral* lit) {
     __ LoadRoot(LoadDescriptor::NameRegister(),
                 Heap::kprototype_stringRootIndex);
     __ Move(LoadDescriptor::SlotRegister(), SmiFromSlot(lit->PrototypeSlot()));
-    CallLoadIC(NOT_INSIDE_TYPEOF);
-    PrepareForBailoutForId(lit->PrototypeId(), TOS_REG);
+    CallLoadIC();
+    PrepareForBailoutForId(lit->PrototypeId(), BailoutState::TOS_REGISTER);
     PushOperand(result_register());
 
     EmitClassDefineProperties(lit);
+    DropOperands(1);
 
-    // Set both the prototype and constructor to have fast properties.
-    CallRuntimeWithOperands(Runtime::kFinalizeClassDefinition);
+    // Set the constructor to have fast properties.
+    CallRuntimeWithOperands(Runtime::kToFastProperties);
 
     if (lit->class_variable_proxy() != nullptr) {
       EmitVariableAssignment(lit->class_variable_proxy()->var(), Token::INIT,
@@ -1530,6 +1540,19 @@ void FullCodeGenerator::VisitClassLiteral(ClassLiteral* lit) {
   context()->Plug(result_register());
 }
 
+void FullCodeGenerator::VisitRegExpLiteral(RegExpLiteral* expr) {
+  Comment cmnt(masm_, "[ RegExpLiteral");
+  Callable callable = CodeFactory::FastCloneRegExp(isolate());
+  CallInterfaceDescriptor descriptor = callable.descriptor();
+  LoadFromFrameField(JavaScriptFrameConstants::kFunctionOffset,
+                     descriptor.GetRegisterParameter(0));
+  __ Move(descriptor.GetRegisterParameter(1),
+          Smi::FromInt(expr->literal_index()));
+  __ Move(descriptor.GetRegisterParameter(2), expr->pattern());
+  __ Move(descriptor.GetRegisterParameter(3), Smi::FromInt(expr->flags()));
+  __ Call(callable.code(), RelocInfo::CODE_TARGET);
+  context()->Plug(result_register());
+}
 
 void FullCodeGenerator::VisitNativeFunctionLiteral(
     NativeFunctionLiteral* expr) {
@@ -1653,7 +1676,7 @@ void FullCodeGenerator::VisitCallRuntime(CallRuntime* expr) {
       VisitForStackValue(args->at(i));
     }
 
-    PrepareForBailoutForId(expr->CallId(), NO_REGISTERS);
+    PrepareForBailoutForId(expr->CallId(), BailoutState::NO_REGISTERS);
     EmitCallJSRuntimeFunction(expr);
     context()->DropAndPlug(1, result_register());
 
@@ -1675,7 +1698,7 @@ void FullCodeGenerator::VisitCallRuntime(CallRuntime* expr) {
         }
 
         // Call the C runtime function.
-        PrepareForBailoutForId(expr->CallId(), NO_REGISTERS);
+        PrepareForBailoutForId(expr->CallId(), BailoutState::NO_REGISTERS);
         __ CallRuntime(expr->function(), arg_count);
         OperandStackDepthDecrement(arg_count);
         context()->Plug(result_register());
@@ -1768,16 +1791,19 @@ bool FullCodeGenerator::TryLiteralCompare(CompareOperation* expr) {
   Expression* sub_expr;
   Handle<String> check;
   if (expr->IsLiteralCompareTypeof(&sub_expr, &check)) {
+    SetExpressionPosition(expr);
     EmitLiteralCompareTypeof(expr, sub_expr, check);
     return true;
   }
 
   if (expr->IsLiteralCompareUndefined(&sub_expr)) {
+    SetExpressionPosition(expr);
     EmitLiteralCompareNil(expr, sub_expr, kUndefinedValue);
     return true;
   }
 
   if (expr->IsLiteralCompareNull(&sub_expr)) {
+    SetExpressionPosition(expr);
     EmitLiteralCompareNil(expr, sub_expr, kNullValue);
     return true;
   }
@@ -1861,7 +1887,7 @@ FullCodeGenerator::EnterBlockScopeIfNeeded::EnterBlockScopeIfNeeded(
   saved_scope_ = codegen_->scope();
 
   if (scope == NULL) {
-    codegen_->PrepareForBailoutForId(entry_id, NO_REGISTERS);
+    codegen_->PrepareForBailoutForId(entry_id, BailoutState::NO_REGISTERS);
     needs_block_context_ = false;
   } else {
     needs_block_context_ = scope->NeedsContext();
@@ -1878,12 +1904,13 @@ FullCodeGenerator::EnterBlockScopeIfNeeded::EnterBlockScopeIfNeeded(
                                     codegen_->context_register());
       }
       CHECK_EQ(0, scope->num_stack_slots());
-      codegen_->PrepareForBailoutForId(entry_id, NO_REGISTERS);
+      codegen_->PrepareForBailoutForId(entry_id, BailoutState::NO_REGISTERS);
     }
     {
       Comment cmnt(masm(), "[ Declarations");
       codegen_->VisitDeclarations(scope->declarations());
-      codegen_->PrepareForBailoutForId(declarations_id, NO_REGISTERS);
+      codegen_->PrepareForBailoutForId(declarations_id,
+                                       BailoutState::NO_REGISTERS);
     }
   }
 }
@@ -1897,7 +1924,7 @@ FullCodeGenerator::EnterBlockScopeIfNeeded::~EnterBlockScopeIfNeeded() {
     codegen_->StoreToFrameField(StandardFrameConstants::kContextOffset,
                                 codegen_->context_register());
   }
-  codegen_->PrepareForBailoutForId(exit_id_, NO_REGISTERS);
+  codegen_->PrepareForBailoutForId(exit_id_, BailoutState::NO_REGISTERS);
   codegen_->scope_ = saved_scope_;
 }
 
@@ -1956,7 +1983,7 @@ bool FullCodeGenerator::NeedsHoleCheckForLoad(VariableProxy* proxy) {
   DCHECK(var->initializer_position() != RelocInfo::kNoPosition);
   DCHECK(proxy->position() != RelocInfo::kNoPosition);
 
-  return var->mode() == CONST_LEGACY || var->scope()->is_nonlinear() ||
+  return var->scope()->is_nonlinear() ||
          var->initializer_position() >= proxy->position();
 }
 

@@ -104,6 +104,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kS390_Float32ToUint32:
     case kS390_Float32ToUint64:
     case kS390_Float32ToDouble:
+    case kS390_Float64SilenceNaN:
     case kS390_DoubleToInt32:
     case kS390_DoubleToUint32:
     case kS390_Float32ToInt64:
@@ -126,6 +127,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kS390_LoadWordS16:
     case kS390_LoadWordU16:
     case kS390_LoadWordS32:
+    case kS390_LoadWordU32:
     case kS390_LoadWord64:
     case kS390_LoadFloat32:
     case kS390_LoadDouble:

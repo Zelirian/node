@@ -113,9 +113,9 @@
       [ 'OS=="win" and '
         'node_use_openssl=="true" and '
         'node_shared_openssl=="false"', {
-        'use_openssl_def%': 1,
+        'use_openssl_def': 1,
       }, {
-        'use_openssl_def%': 0,
+        'use_openssl_def': 0,
       }],
     ],
   },
@@ -258,8 +258,8 @@
         }],
         [ 'node_use_bundled_v8=="true"', {
           'dependencies': [
-            'deps/v8/tools/gyp/v8.gyp:v8',
-            'deps/v8/tools/gyp/v8.gyp:v8_libplatform'
+            'deps/v8/src/v8.gyp:v8',
+            'deps/v8/src/v8.gyp:v8_libplatform'
           ],
         }],
         [ 'node_use_v8_platform=="true"', {
@@ -310,8 +310,6 @@
         [ 'v8_inspector=="true"', {
           'defines': [
             'HAVE_INSPECTOR=1',
-            'V8_INSPECTOR_USE_STL=1',
-            'V8_INSPECTOR_USE_OLD_STL=1',
           ],
           'sources': [
             'src/inspector_agent.cc',
@@ -320,12 +318,13 @@
             'src/inspector_agent.h',
           ],
           'dependencies': [
-            'deps/v8_inspector/third_party/v8_inspector/platform/'
-                'v8_inspector/v8_inspector.gyp:v8_inspector_stl',
+            'deps/v8_inspector/src/inspector/inspector.gyp:standalone_inspector',
+            'v8_inspector_compress_protocol_json#host',
           ],
           'include_dirs': [
-            'deps/v8_inspector/third_party/v8_inspector',
-            '<(SHARED_INTERMEDIATE_DIR)/blink', # for inspector
+            'deps/v8_inspector/include',
+            '<(SHARED_INTERMEDIATE_DIR)/include', # for inspector
+            '<(SHARED_INTERMEDIATE_DIR)',
           ],
         }, {
           'defines': [ 'HAVE_INSPECTOR=0' ]
@@ -462,7 +461,7 @@
           'defines': [ 'NODE_NO_BROWSER_GLOBALS' ],
         } ],
         [ 'node_use_bundled_v8=="true" and v8_postmortem_support=="true"', {
-          'dependencies': [ 'deps/v8/tools/gyp/v8.gyp:postmortem-metadata' ],
+          'dependencies': [ 'deps/v8/src/v8.gyp:postmortem-metadata' ],
           'conditions': [
             # -force_load is not applicable for the static library
             [ 'node_target_type!="static_library"', {
@@ -649,6 +648,33 @@
           ],
         } ]
       ]
+    },
+    {
+      'target_name': 'v8_inspector_compress_protocol_json',
+      'type': 'none',
+      'toolsets': ['host'],
+      'conditions': [
+        [ 'v8_inspector=="true"', {
+          'actions': [
+            {
+              'action_name': 'v8_inspector_compress_protocol_json',
+              'process_outputs_as_sources': 1,
+              'inputs': [
+                'deps/v8_inspector/src/inspector/js_protocol.json',
+              ],
+              'outputs': [
+                '<(SHARED_INTERMEDIATE_DIR)/v8_inspector_protocol_json.h',
+              ],
+              'action': [
+                'python',
+                'tools/compress_json.py',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+            },
+          ],
+        }],
+      ],
     },
     {
       'target_name': 'node_js2c',
@@ -869,13 +895,13 @@
         }],
         [ 'node_use_v8_platform=="true"', {
           'dependencies': [
-            'deps/v8/tools/gyp/v8.gyp:v8_libplatform',
+            'deps/v8/src/v8.gyp:v8_libplatform',
           ],
         }],
         [ 'node_use_bundled_v8=="true"', {
           'dependencies': [
-            'deps/v8/tools/gyp/v8.gyp:v8',
-            'deps/v8/tools/gyp/v8.gyp:v8_libplatform'
+            'deps/v8/src/v8.gyp:v8',
+            'deps/v8/src/v8.gyp:v8_libplatform'
           ],
         }],
       ]

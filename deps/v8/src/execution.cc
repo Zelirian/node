@@ -94,6 +94,7 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(Isolate* isolate, bool is_construct,
     if (FLAG_profile_deserialization && target->IsJSFunction()) {
       PrintDeserializedCodeInfo(Handle<JSFunction>::cast(target));
     }
+    RuntimeCallTimerScope timer(isolate, &RuntimeCallStats::JS_Execution);
     value = CALL_GENERATED_CODE(isolate, stub_entry, orig_func, func, recv,
                                 argc, argv);
   }
@@ -105,7 +106,7 @@ MUST_USE_RESULT MaybeHandle<Object> Invoke(Isolate* isolate, bool is_construct,
 #endif
 
   // Update the pending exception flag and return the value.
-  bool has_exception = value->IsException();
+  bool has_exception = value->IsException(isolate);
   DCHECK(has_exception == isolate->has_pending_exception());
   if (has_exception) {
     isolate->ReportPendingMessages();
@@ -139,7 +140,8 @@ MaybeHandle<Object> Execution::Call(Isolate* isolate, Handle<Object> callable,
     SaveContext save(isolate);
     isolate->set_context(function->context());
     DCHECK(function->context()->global_object()->IsJSGlobalObject());
-    auto value = Builtins::InvokeApiFunction(function, receiver, argc, argv);
+    auto value =
+        Builtins::InvokeApiFunction(isolate, function, receiver, argc, argv);
     bool has_exception = value.is_null();
     DCHECK(has_exception == isolate->has_pending_exception());
     if (has_exception) {

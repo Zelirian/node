@@ -31,6 +31,8 @@
     # Don't bake anything extra into the snapshot.
     'v8_use_external_startup_data%': 0,
 
+    'icu_use_data_file_flag%': 0,
+
     'conditions': [
       ['OS == "win"', {
         'os_posix': 0,
@@ -381,7 +383,8 @@
           ['clang==1', {
             'xcode_settings': {
               'GCC_VERSION': 'com.apple.compilers.llvm.clang.1_0',
-              'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++0x',  # -std=gnu++0x
+              'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++0x',  # -std=gnu++0x,
+              'CLANG_CXX_LIBRARY': 'libc++'
             },
           }],
         ],

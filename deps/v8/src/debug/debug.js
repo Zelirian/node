@@ -51,8 +51,7 @@ Debug.DebugEvent = { Break: 1,
                      BeforeCompile: 4,
                      AfterCompile: 5,
                      CompileError: 6,
-                     PromiseEvent: 7,
-                     AsyncTaskEvent: 8 };
+                     AsyncTaskEvent: 7 };
 
 // Types of exceptions that can be broken upon.
 Debug.ExceptionBreak = { Caught : 0,
@@ -362,7 +361,7 @@ ScriptBreakPoint.prototype.matchesScript = function(script) {
   } else {
     // We might want to account columns here as well.
     if (!(script.line_offset <= this.line_  &&
-          this.line_ < script.line_offset + script.lineCount())) {
+          this.line_ < script.line_offset + %ScriptLineCount(script))) {
       return false;
     }
     if (this.type_ == Debug.ScriptBreakPointType.ScriptName) {
@@ -384,11 +383,11 @@ ScriptBreakPoint.prototype.set = function (script) {
   // first piece of breakable code on the line try to find the column on the
   // line which contains some source.
   if (IS_UNDEFINED(column)) {
-    var source_line = script.sourceLine(this.line());
+    var source_line = %ScriptSourceLine(script, line || script.line_offset);
 
     // Allocate array for caching the columns where the actual source starts.
     if (!script.sourceColumnStart_) {
-      script.sourceColumnStart_ = new GlobalArray(script.lineCount());
+      script.sourceColumnStart_ = new GlobalArray(%ScriptLineCount(script));
     }
 
     // Fill cache if needed and get column where the actual source starts.
@@ -537,14 +536,14 @@ Debug.sourcePosition = function(f) {
 Debug.findFunctionSourceLocation = function(func, opt_line, opt_column) {
   var script = %FunctionGetScript(func);
   var script_offset = %FunctionGetScriptSourcePosition(func);
-  return script.locationFromLine(opt_line, opt_column, script_offset);
+  return %ScriptLocationFromLine(script, opt_line, opt_column, script_offset);
 };
 
 
 // Returns the character position in a script based on a line number and an
 // optional position within that line.
 Debug.findScriptSourcePosition = function(script, opt_line, opt_column) {
-  var location = script.locationFromLine(opt_line, opt_column);
+  var location = %ScriptLocationFromLine(script, opt_line, opt_column, 0);
   return location ? location.position : null;
 };
 
@@ -895,10 +894,6 @@ ExecutionState.prototype.frameCount = function() {
   return %GetFrameCount(this.break_id);
 };
 
-ExecutionState.prototype.threadCount = function() {
-  return %GetThreadCount(this.break_id);
-};
-
 ExecutionState.prototype.frame = function(opt_index) {
   // If no index supplied return the selected frame.
   if (opt_index == null) opt_index = this.selected_frame;
@@ -1138,39 +1133,6 @@ function MakeScriptObject_(script, include_source) {
     o.source = script.source();
   }
   return o;
-}
-
-
-function MakePromiseEvent(event_data) {
-  return new PromiseEvent(event_data);
-}
-
-
-function PromiseEvent(event_data) {
-  this.promise_ = event_data.promise;
-  this.parentPromise_ = event_data.parentPromise;
-  this.status_ = event_data.status;
-  this.value_ = event_data.value;
-}
-
-
-PromiseEvent.prototype.promise = function() {
-  return MakeMirror(this.promise_);
-}
-
-
-PromiseEvent.prototype.parentPromise = function() {
-  return MakeMirror(this.parentPromise_);
-}
-
-
-PromiseEvent.prototype.status = function() {
-  return this.status_;
-}
-
-
-PromiseEvent.prototype.value = function() {
-  return MakeMirror(this.value_);
 }
 
 
@@ -2123,18 +2085,34 @@ DebugCommandProcessor.prototype.sourceRequest_ = function(request, response) {
     return response.failed('No source');
   }
 
-  // Get the source slice and fill it into the response.
-  var slice = script.sourceSlice(from_line, to_line);
-  if (!slice) {
+  var raw_script = script.value();
+
+  // Sanitize arguments and remove line offset.
+  var line_offset = raw_script.line_offset;
+  var line_count = %ScriptLineCount(raw_script);
+  from_line = IS_UNDEFINED(from_line) ? 0 : from_line - line_offset;
+  to_line = IS_UNDEFINED(to_line) ? line_count : to_line - line_offset;
+
+  if (from_line < 0) from_line = 0;
+  if (to_line > line_count) to_line = line_count;
+
+  if (from_line >= line_count || to_line < 0 || from_line > to_line) {
     return response.failed('Invalid line interval');
   }
+
+  // Fill in the response.
+
   response.body = {};
-  response.body.source = slice.sourceText();
-  response.body.fromLine = slice.from_line;
-  response.body.toLine = slice.to_line;
-  response.body.fromPosition = slice.from_position;
-  response.body.toPosition = slice.to_position;
-  response.body.totalLines = script.lineCount();
+  response.body.fromLine = from_line + line_offset;
+  response.body.toLine = to_line + line_offset;
+  response.body.fromPosition = %ScriptLineStartPosition(raw_script, from_line);
+  response.body.toPosition =
+    (to_line == 0) ? 0 : %ScriptLineEndPosition(raw_script, to_line - 1);
+  response.body.totalLines = %ScriptLineCount(raw_script);
+
+  response.body.source = %_SubString(raw_script.source,
+                                     response.body.fromPosition,
+                                     response.body.toPosition);
 };
 
 
@@ -2204,28 +2182,6 @@ DebugCommandProcessor.prototype.scriptsRequest_ = function(request, response) {
       response.body.push(MakeMirror(scripts[i]));
     }
   }
-};
-
-
-DebugCommandProcessor.prototype.threadsRequest_ = function(request, response) {
-  // Get the number of threads.
-  var total_threads = this.exec_state_.threadCount();
-
-  // Get information for all threads.
-  var threads = [];
-  for (var i = 0; i < total_threads; i++) {
-    var details = %GetThreadDetails(this.exec_state_.break_id, i);
-    var thread_info = { current: details[0],
-                        id: details[1]
-                      };
-    threads.push(thread_info);
-  }
-
-  // Create the response body.
-  response.body = {
-    totalThreads: total_threads,
-    threads: threads
-  };
 };
 
 
@@ -2394,7 +2350,6 @@ DebugCommandProcessor.prototype.dispatch_ = (function() {
     "references":           proto.referencesRequest_,
     "source":               proto.sourceRequest_,
     "scripts":              proto.scriptsRequest_,
-    "threads":              proto.threadsRequest_,
     "suspend":              proto.suspendRequest_,
     "version":              proto.versionRequest_,
     "changelive":           proto.changeLiveRequest_,
@@ -2517,7 +2472,6 @@ utils.InstallFunctions(utils, DONT_ENUM, [
   "MakeExceptionEvent", MakeExceptionEvent,
   "MakeBreakEvent", MakeBreakEvent,
   "MakeCompileEvent", MakeCompileEvent,
-  "MakePromiseEvent", MakePromiseEvent,
   "MakeAsyncTaskEvent", MakeAsyncTaskEvent,
   "IsBreakPointTriggered", IsBreakPointTriggered,
   "UpdateScriptBreakPoints", UpdateScriptBreakPoints,

@@ -13,17 +13,16 @@ snippet: "
 "
 frame size: 2
 parameter count: 1
-bytecode array length: 19
+bytecode array length: 18
 bytecodes: [
-  B(Ldar), R(new_target),
-  B(Star), R(0),
-  B(StackCheck),
-  B(Ldar), R(0),
-  B(JumpIfNotHole), U8(11),
-  B(LdaConstant), U8(0),
-  B(Star), R(1),
-  B(CallRuntime), U16(Runtime::kThrowReferenceError), R(1), U8(1),
-  B(Return),
+                B(Mov), R(new_target), R(0),
+  /*   30 E> */ B(StackCheck),
+  /*   34 S> */ B(Ldar), R(new_target),
+                B(JumpIfNotHole), U8(11),
+                B(LdaConstant), U8(0),
+                B(Star), R(1),
+                B(CallRuntime), U16(Runtime::kThrowReferenceError), R(1), U8(1),
+  /*   53 S> */ B(Return),
 ]
 constant pool: [
   InstanceType::ONE_BYTE_INTERNALIZED_STRING_TYPE,
@@ -37,18 +36,17 @@ snippet: "
 "
 frame size: 2
 parameter count: 1
-bytecode array length: 20
+bytecode array length: 19
 bytecodes: [
-  B(Ldar), R(new_target),
-  B(Star), R(0),
-  B(StackCheck),
-  B(Ldar), R(0),
-  B(JumpIfNotHole), U8(11),
-  B(LdaConstant), U8(0),
-  B(Star), R(1),
-  B(CallRuntime), U16(Runtime::kThrowReferenceError), R(1), U8(1),
-  B(LdaUndefined),
-  B(Return),
+                B(Mov), R(new_target), R(0),
+  /*   30 E> */ B(StackCheck),
+  /*   34 S> */ B(Ldar), R(new_target),
+                B(JumpIfNotHole), U8(11),
+                B(LdaConstant), U8(0),
+                B(Star), R(1),
+                B(CallRuntime), U16(Runtime::kThrowReferenceError), R(1), U8(1),
+                B(LdaUndefined),
+  /*   46 S> */ B(Return),
 ]
 constant pool: [
   InstanceType::ONE_BYTE_INTERNALIZED_STRING_TYPE,

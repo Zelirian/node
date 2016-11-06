@@ -116,7 +116,8 @@ class LCodeGen : public LCodeGenBase {
   MemOperand PrepareKeyedOperand(Register key, Register base,
                                  bool key_is_constant, bool key_is_tagged,
                                  int constant_key, int element_size_shift,
-                                 int base_offset);
+                                 int base_offset,
+                                 bool keyMaybeNegative = true);
 
   // Emit frame translation commands for an environment.
   void WriteTranslation(LEnvironment* environment, Translation* translation);
@@ -127,8 +128,6 @@ class LCodeGen : public LCodeGenBase {
 #undef DECLARE_DO
 
  private:
-  LanguageMode language_mode() const { return info()->language_mode(); }
-
   Scope* scope() const { return scope_; }
 
   Register scratch0() { return kLithiumScratch; }

@@ -4,14 +4,11 @@
 
 (function(global, utils) {
 
-'use strict';
-
 %CheckIsBootstrapping();
 
 // -------------------------------------------------------------------
 // Imports
 
-var AddIndexedProperty;
 var ExpandReplacement;
 var GlobalArray = global.Array;
 var GlobalObject = global.Object;
@@ -25,11 +22,11 @@ var MinSimple;
 var matchSymbol = utils.ImportNow("match_symbol");
 var replaceSymbol = utils.ImportNow("replace_symbol");
 var searchSymbol = utils.ImportNow("search_symbol");
+var speciesSymbol = utils.ImportNow("species_symbol");
 var splitSymbol = utils.ImportNow("split_symbol");
 var SpeciesConstructor;
 
 utils.Import(function(from) {
-  AddIndexedProperty = from.AddIndexedProperty;
   ExpandReplacement = from.ExpandReplacement;
   MakeTypeError = from.MakeTypeError;
   MaxSimple = from.MaxSimple;
@@ -327,10 +324,10 @@ function RegExpTest(string) {
     // not a '?'.  But see https://code.google.com/p/v8/issues/detail?id=3560
     var regexp = this;
     var source = REGEXP_SOURCE(regexp);
-    if (regexp.length >= 3 &&
-        %_StringCharCodeAt(regexp, 0) == 46 &&  // '.'
-        %_StringCharCodeAt(regexp, 1) == 42 &&  // '*'
-        %_StringCharCodeAt(regexp, 2) != 63) {  // '?'
+    if (source.length >= 3 &&
+        %_StringCharCodeAt(source, 0) == 46 &&  // '.'
+        %_StringCharCodeAt(source, 1) == 42 &&  // '*'
+        %_StringCharCodeAt(source, 2) != 63) {  // '?'
       regexp = TrimRegExp(regexp);
     }
     // matchIndices is either null or the RegExpLastMatchInfo array.
@@ -502,7 +499,7 @@ function RegExpSubclassSplit(string, limit) {
   var result;
   if (size === 0) {
     result = RegExpSubclassExec(splitter, string);
-    if (IS_NULL(result)) AddIndexedProperty(array, 0, string);
+    if (IS_NULL(result)) %AddElement(array, 0, string);
     return array;
   }
   var stringIndex = prevStringIndex;
@@ -515,10 +512,10 @@ function RegExpSubclassSplit(string, limit) {
       stringIndex += AdvanceStringIndex(string, stringIndex, unicode);
     } else {
       var end = MinSimple(TO_LENGTH(splitter.lastIndex), size);
-      if (end === stringIndex) {
+      if (end === prevStringIndex) {
         stringIndex += AdvanceStringIndex(string, stringIndex, unicode);
       } else {
-        AddIndexedProperty(
+        %AddElement(
             array, arrayIndex,
             %_SubString(string, prevStringIndex, stringIndex));
         arrayIndex++;
@@ -526,7 +523,7 @@ function RegExpSubclassSplit(string, limit) {
         prevStringIndex = end;
         var numberOfCaptures = MaxSimple(TO_LENGTH(result.length), 0);
         for (var i = 1; i < numberOfCaptures; i++) {
-          AddIndexedProperty(array, arrayIndex, result[i]);
+          %AddElement(array, arrayIndex, result[i]);
           arrayIndex++;
           if (arrayIndex === lim) return array;
         }
@@ -534,27 +531,11 @@ function RegExpSubclassSplit(string, limit) {
       }
     }
   }
-  AddIndexedProperty(array, arrayIndex,
+  %AddElement(array, arrayIndex,
                      %_SubString(string, prevStringIndex, size));
   return array;
 }
 %FunctionRemovePrototype(RegExpSubclassSplit);
-
-
-// Legacy implementation of RegExp.prototype[Symbol.match] which
-// doesn't properly call the underlying exec method
-function RegExpMatch(string) {
-  if (!IS_REGEXP(this)) {
-    throw MakeTypeError(kIncompatibleMethodReceiver,
-                        "RegExp.prototype.@@match", this);
-  }
-  var subject = TO_STRING(string);
-
-  if (!REGEXP_GLOBAL(this)) return RegExpExecNoTests(this, subject, 0);
-  this.lastIndex = 0;
-  var result = %StringMatch(subject, this, RegExpLastMatchInfo);
-  return result;
-}
 
 
 // ES#sec-regexp.prototype-@@match
@@ -956,19 +937,6 @@ function RegExpSubclassReplace(string, replace) {
 %FunctionRemovePrototype(RegExpSubclassReplace);
 
 
-// Legacy implementation of RegExp.prototype[Symbol.search] which
-// doesn't properly use the overridden exec method
-function RegExpSearch(string) {
-  if (!IS_REGEXP(this)) {
-    throw MakeTypeError(kIncompatibleMethodReceiver,
-                        "RegExp.prototype.@@search", this);
-  }
-  var match = DoRegExpExec(this, TO_STRING(string), 0);
-  if (match) return match[CAPTURE0];
-  return -1;
-}
-
-
 // ES#sec-regexp.prototype-@@search
 // RegExp.prototype [ @@search ] ( string )
 function RegExpSubclassSearch(string) {
@@ -1136,6 +1104,27 @@ function RegExpGetSticky() {
 }
 %SetForceInlineFlag(RegExpGetSticky);
 
+
+// ES6 21.2.5.15.
+function RegExpGetUnicode() {
+  if (!IS_REGEXP(this)) {
+    // TODO(littledan): Remove this RegExp compat workaround
+    if (this === GlobalRegExpPrototype) {
+      %IncrementUseCounter(kRegExpPrototypeUnicodeGetter);
+      return UNDEFINED;
+    }
+    throw MakeTypeError(kRegExpNonRegExp, "RegExp.prototype.unicode");
+  }
+  return TO_BOOLEAN(REGEXP_UNICODE(this));
+}
+%SetForceInlineFlag(RegExpGetUnicode);
+
+
+function RegExpSpecies() {
+  return this;
+}
+
+
 // -------------------------------------------------------------------
 
 %FunctionSetInstanceClassName(GlobalRegExp, 'RegExp');
@@ -1145,15 +1134,17 @@ GlobalRegExpPrototype = new GlobalObject();
     GlobalRegExp.prototype, 'constructor', GlobalRegExp, DONT_ENUM);
 %SetCode(GlobalRegExp, RegExpConstructor);
 
+utils.InstallGetter(GlobalRegExp, speciesSymbol, RegExpSpecies);
+
 utils.InstallFunctions(GlobalRegExp.prototype, DONT_ENUM, [
-  "exec", RegExpExecJS,
-  "test", RegExpTest,
+  "exec", RegExpSubclassExecJS,
+  "test", RegExpSubclassTest,
   "toString", RegExpToString,
   "compile", RegExpCompileJS,
-  matchSymbol, RegExpMatch,
-  replaceSymbol, RegExpReplace,
-  searchSymbol, RegExpSearch,
-  splitSymbol, RegExpSplit,
+  matchSymbol, RegExpSubclassMatch,
+  replaceSymbol, RegExpSubclassReplace,
+  searchSymbol, RegExpSubclassSearch,
+  splitSymbol, RegExpSubclassSplit,
 ]);
 
 utils.InstallGetter(GlobalRegExp.prototype, 'flags', RegExpGetFlags);
@@ -1162,6 +1153,7 @@ utils.InstallGetter(GlobalRegExp.prototype, 'ignoreCase', RegExpGetIgnoreCase);
 utils.InstallGetter(GlobalRegExp.prototype, 'multiline', RegExpGetMultiline);
 utils.InstallGetter(GlobalRegExp.prototype, 'source', RegExpGetSource);
 utils.InstallGetter(GlobalRegExp.prototype, 'sticky', RegExpGetSticky);
+utils.InstallGetter(GlobalRegExp.prototype, 'unicode', RegExpGetUnicode);
 
 // The properties `input` and `$_` are aliases for each other.  When this
 // value is set the value it is set to is coerced to a string.
@@ -1236,12 +1228,6 @@ utils.Export(function(to) {
   to.RegExpExec = DoRegExpExec;
   to.RegExpInitialize = RegExpInitialize;
   to.RegExpLastMatchInfo = RegExpLastMatchInfo;
-  to.RegExpSubclassExecJS = RegExpSubclassExecJS;
-  to.RegExpSubclassMatch = RegExpSubclassMatch;
-  to.RegExpSubclassReplace = RegExpSubclassReplace;
-  to.RegExpSubclassSearch = RegExpSubclassSearch;
-  to.RegExpSubclassSplit = RegExpSubclassSplit;
-  to.RegExpSubclassTest = RegExpSubclassTest;
   to.RegExpTest = RegExpTest;
 });
 

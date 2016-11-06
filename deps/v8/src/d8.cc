@@ -19,6 +19,7 @@
 
 #ifndef V8_SHARED
 #include <algorithm>
+#include <fstream>
 #include <vector>
 #endif  // !V8_SHARED
 
@@ -41,6 +42,7 @@
 #include "src/base/platform/platform.h"
 #include "src/base/sys-info.h"
 #include "src/basic-block-profiler.h"
+#include "src/interpreter/interpreter.h"
 #include "src/snapshot/natives.h"
 #include "src/utils.h"
 #include "src/v8.h"
@@ -133,7 +135,7 @@ class PredictablePlatform : public Platform {
   }
 
   uint64_t AddTraceEvent(char phase, const uint8_t* categoryEnabledFlag,
-                         const char* name, uint64_t id,
+                         const char* name, const char* scope, uint64_t id,
                          uint64_t bind_id, int numArgs, const char** argNames,
                          const uint8_t* argTypes, const uint64_t* argValues,
                          unsigned int flags) override {
@@ -336,7 +338,9 @@ MaybeLocal<Script> Shell::CompileString(
     ScriptCompiler::CompileOptions compile_options, SourceType source_type) {
   Local<Context> context(isolate->GetCurrentContext());
   ScriptOrigin origin(name);
-  if (compile_options == ScriptCompiler::kNoCompileOptions) {
+  // TODO(adamk): Make use of compile options for Modules.
+  if (compile_options == ScriptCompiler::kNoCompileOptions ||
+      source_type == MODULE) {
     ScriptCompiler::Source script_source(source, origin);
     return source_type == SCRIPT
                ? ScriptCompiler::Compile(context, &script_source,
@@ -356,11 +360,9 @@ MaybeLocal<Script> Shell::CompileString(
     DCHECK(false);  // A new compile option?
   }
   if (data == NULL) compile_options = ScriptCompiler::kNoCompileOptions;
+  DCHECK_EQ(SCRIPT, source_type);
   MaybeLocal<Script> result =
-      source_type == SCRIPT
-          ? ScriptCompiler::Compile(context, &cached_source, compile_options)
-          : ScriptCompiler::CompileModule(context, &cached_source,
-                                          compile_options);
+      ScriptCompiler::Compile(context, &cached_source, compile_options);
   CHECK(data == NULL || !data->rejected);
   return result;
 }
@@ -521,9 +523,8 @@ void Shell::RealmGlobal(const v8::FunctionCallbackInfo<v8::Value>& args) {
       Local<Context>::New(args.GetIsolate(), data->realms_[index])->Global());
 }
 
-
-// Realm.create() creates a new realm and returns its index.
-void Shell::RealmCreate(const v8::FunctionCallbackInfo<v8::Value>& args) {
+MaybeLocal<Context> Shell::CreateRealm(
+    const v8::FunctionCallbackInfo<v8::Value>& args) {
   Isolate* isolate = args.GetIsolate();
   TryCatch try_catch(isolate);
   PerIsolateData* data = PerIsolateData::Get(isolate);
@@ -540,12 +541,29 @@ void Shell::RealmCreate(const v8::FunctionCallbackInfo<v8::Value>& args) {
   if (context.IsEmpty()) {
     DCHECK(try_catch.HasCaught());
     try_catch.ReThrow();
-    return;
+    return MaybeLocal<Context>();
   }
   data->realms_[index].Reset(isolate, context);
   args.GetReturnValue().Set(index);
+  return context;
 }
 
+// Realm.create() creates a new realm with a distinct security token
+// and returns its index.
+void Shell::RealmCreate(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  CreateRealm(args);
+}
+
+// Realm.createAllowCrossRealmAccess() creates a new realm with the same
+// security token as the current realm.
+void Shell::RealmCreateAllowCrossRealmAccess(
+    const v8::FunctionCallbackInfo<v8::Value>& args) {
+  Local<Context> context;
+  if (CreateRealm(args).ToLocal(&context)) {
+    context->SetSecurityToken(
+        args.GetIsolate()->GetEnteredContext()->GetSecurityToken());
+  }
+}
 
 // Realm.dispose(i) disposes the reference to the realm i.
 void Shell::RealmDispose(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -907,25 +925,28 @@ void Shell::ReportException(Isolate* isolate, v8::TryCatch* try_catch) {
     // Print (filename):(line number): (message).
     v8::String::Utf8Value filename(message->GetScriptOrigin().ResourceName());
     const char* filename_string = ToCString(filename);
-    int linenum =
-        message->GetLineNumber(isolate->GetCurrentContext()).FromJust();
+    Maybe<int> maybeline = message->GetLineNumber(isolate->GetCurrentContext());
+    int linenum = maybeline.IsJust() ? maybeline.FromJust() : -1;
     printf("%s:%i: %s\n", filename_string, linenum, exception_string);
-    // Print line of source code.
-    v8::String::Utf8Value sourceline(
-        message->GetSourceLine(isolate->GetCurrentContext()).ToLocalChecked());
-    const char* sourceline_string = ToCString(sourceline);
-    printf("%s\n", sourceline_string);
-    // Print wavy underline (GetUnderline is deprecated).
-    int start =
-        message->GetStartColumn(isolate->GetCurrentContext()).FromJust();
-    for (int i = 0; i < start; i++) {
-      printf(" ");
+    Local<String> sourceline;
+    if (message->GetSourceLine(isolate->GetCurrentContext())
+            .ToLocal(&sourceline)) {
+      // Print line of source code.
+      v8::String::Utf8Value sourcelinevalue(sourceline);
+      const char* sourceline_string = ToCString(sourcelinevalue);
+      printf("%s\n", sourceline_string);
+      // Print wavy underline (GetUnderline is deprecated).
+      int start =
+          message->GetStartColumn(isolate->GetCurrentContext()).FromJust();
+      for (int i = 0; i < start; i++) {
+        printf(" ");
+      }
+      int end = message->GetEndColumn(isolate->GetCurrentContext()).FromJust();
+      for (int i = start; i < end; i++) {
+        printf("^");
+      }
+      printf("\n");
     }
-    int end = message->GetEndColumn(isolate->GetCurrentContext()).FromJust();
-    for (int i = start; i < end; i++) {
-      printf("^");
-    }
-    printf("\n");
     Local<Value> stack_trace_string;
     if (try_catch->StackTrace(isolate->GetCurrentContext())
             .ToLocal(&stack_trace_string) &&
@@ -1114,6 +1135,10 @@ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
       String::NewFromUtf8(isolate, "version", NewStringType::kNormal)
           .ToLocalChecked(),
       FunctionTemplate::New(isolate, Version));
+  global_template->Set(
+      Symbol::GetToStringTag(isolate),
+      String::NewFromUtf8(isolate, "global", NewStringType::kNormal)
+          .ToLocalChecked());
 
   // Bind the Realm object.
   Local<ObjectTemplate> realm_template = ObjectTemplate::New(isolate);
@@ -1133,6 +1158,11 @@ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
       String::NewFromUtf8(isolate, "create", NewStringType::kNormal)
           .ToLocalChecked(),
       FunctionTemplate::New(isolate, RealmCreate));
+  realm_template->Set(
+      String::NewFromUtf8(isolate, "createAllowCrossRealmAccess",
+                          NewStringType::kNormal)
+          .ToLocalChecked(),
+      FunctionTemplate::New(isolate, RealmCreateAllowCrossRealmAccess));
   realm_template->Set(
       String::NewFromUtf8(isolate, "dispose", NewStringType::kNormal)
           .ToLocalChecked(),
@@ -1275,6 +1305,21 @@ struct CounterAndKey {
 inline bool operator<(const CounterAndKey& lhs, const CounterAndKey& rhs) {
   return strcmp(lhs.key, rhs.key) < 0;
 }
+
+void Shell::WriteIgnitionDispatchCountersFile(v8::Isolate* isolate) {
+  HandleScope handle_scope(isolate);
+  Local<Context> context = Context::New(isolate);
+  Context::Scope context_scope(context);
+
+  Local<Object> dispatch_counters = reinterpret_cast<i::Isolate*>(isolate)
+                                        ->interpreter()
+                                        ->GetDispatchCountersObject();
+  std::ofstream dispatch_counters_stream(
+      i::FLAG_trace_ignition_dispatches_output_file);
+  dispatch_counters_stream << *String::Utf8Value(
+      JSON::Stringify(context, dispatch_counters).ToLocalChecked());
+}
+
 #endif  // !V8_SHARED
 
 
@@ -1312,6 +1357,7 @@ void Shell::OnExit(v8::Isolate* isolate) {
            "-------------+\n");
     delete [] counters;
   }
+
   delete counters_file_;
   delete counter_map_;
 #endif  // !V8_SHARED
@@ -2383,7 +2429,7 @@ int Shell::Main(int argc, char* argv[]) {
 #endif  // defined(_MSC_VER)
 #endif  // defined(_WIN32) || defined(_WIN64)
   if (!SetOptions(argc, argv)) return 1;
-  v8::V8::InitializeICU(options.icu_data_file);
+  v8::V8::InitializeICUDefaultLocation(argv[0], options.icu_data_file);
 #ifndef V8_SHARED
   g_platform = i::FLAG_verify_predictable
                    ? new PredictablePlatform()
@@ -2475,6 +2521,13 @@ int Shell::Main(int argc, char* argv[]) {
     if (options.use_interactive_shell()) {
       RunShell(isolate);
     }
+
+#ifndef V8_SHARED
+    if (i::FLAG_ignition && i::FLAG_trace_ignition_dispatches &&
+        i::FLAG_trace_ignition_dispatches_output_file != nullptr) {
+      WriteIgnitionDispatchCountersFile(isolate);
+    }
+#endif
 
     // Shut down contexts and collect garbage.
     evaluation_context_.Reset();

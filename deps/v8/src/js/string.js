@@ -13,8 +13,6 @@ var ArrayIndexOf;
 var ArrayJoin;
 var GlobalRegExp = global.RegExp;
 var GlobalString = global.String;
-var InternalArray = utils.InternalArray;
-var InternalPackedArray = utils.InternalPackedArray;
 var IsRegExp;
 var MakeRangeError;
 var MakeTypeError;
@@ -54,30 +52,6 @@ function StringValueOf() {
     throw MakeTypeError(kNotGeneric, 'String.prototype.valueOf');
   }
   return %_ValueOf(this);
-}
-
-
-// ECMA-262, section 15.5.4.4
-function StringCharAtJS(pos) {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.charAt");
-
-  var result = %_StringCharAt(this, pos);
-  if (%_IsSmi(result)) {
-    result = %_StringCharAt(TO_STRING(this), TO_INTEGER(pos));
-  }
-  return result;
-}
-
-
-// ECMA-262 section 15.5.4.5
-function StringCharCodeAtJS(pos) {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.charCodeAt");
-
-  var result = %_StringCharCodeAt(this, pos);
-  if (!%_IsSmi(result)) {
-    result = %_StringCharCodeAt(TO_STRING(this), TO_INTEGER(pos));
-  }
-  return result;
 }
 
 
@@ -544,25 +518,6 @@ function StringToLocaleUpperCase() {
   return %StringToUpperCase(TO_STRING(this));
 }
 
-// ES5, 15.5.4.20
-function StringTrimJS() {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.trim");
-
-  return %StringTrim(TO_STRING(this), true, true);
-}
-
-function StringTrimLeft() {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.trimLeft");
-
-  return %StringTrim(TO_STRING(this), true, false);
-}
-
-function StringTrimRight() {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.trimRight");
-
-  return %StringTrim(TO_STRING(this), false, true);
-}
-
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.2.1
 function HtmlEscape(str) {
@@ -792,33 +747,6 @@ function StringCodePointAt(pos) {
 }
 
 
-// ES6 Draft 05-22-2014, section 21.1.2.2
-function StringFromCodePoint(_) {  // length = 1
-  "use strict";
-  var code;
-  var length = arguments.length;
-  var index;
-  var result = "";
-  for (index = 0; index < length; index++) {
-    code = arguments[index];
-    if (!%_IsSmi(code)) {
-      code = TO_NUMBER(code);
-    }
-    if (code < 0 || code > 0x10FFFF || code !== TO_INTEGER(code)) {
-      throw MakeRangeError(kInvalidCodePoint, code);
-    }
-    if (code <= 0xFFFF) {
-      result += %_StringCharFromCode(code);
-    } else {
-      code -= 0x10000;
-      result += %_StringCharFromCode((code >>> 10) & 0x3FF | 0xD800);
-      result += %_StringCharFromCode(code & 0x3FF | 0xDC00);
-    }
-  }
-  return result;
-}
-
-
 // -------------------------------------------------------------------
 // String methods related to templates
 
@@ -845,16 +773,8 @@ function StringRaw(callSite) {
 
 // -------------------------------------------------------------------
 
-// Set the String function and constructor.
-%FunctionSetPrototype(GlobalString, new GlobalString());
-
-// Set up the constructor property on the String prototype object.
-%AddNamedProperty(
-    GlobalString.prototype, "constructor", GlobalString, DONT_ENUM);
-
 // Set up the non-enumerable functions on the String object.
 utils.InstallFunctions(GlobalString, DONT_ENUM, [
-  "fromCodePoint", StringFromCodePoint,
   "raw", StringRaw
 ]);
 
@@ -862,8 +782,6 @@ utils.InstallFunctions(GlobalString, DONT_ENUM, [
 utils.InstallFunctions(GlobalString.prototype, DONT_ENUM, [
   "valueOf", StringValueOf,
   "toString", StringToString,
-  "charAt", StringCharAtJS,
-  "charCodeAt", StringCharCodeAtJS,
   "codePointAt", StringCodePointAt,
   "concat", StringConcat,
   "endsWith", StringEndsWith,
@@ -885,9 +803,6 @@ utils.InstallFunctions(GlobalString.prototype, DONT_ENUM, [
   "toLocaleLowerCase", StringToLocaleLowerCase,
   "toUpperCase", StringToUpperCaseJS,
   "toLocaleUpperCase", StringToLocaleUpperCase,
-  "trim", StringTrimJS,
-  "trimLeft", StringTrimLeft,
-  "trimRight", StringTrimRight,
 
   "link", StringLink,
   "anchor", StringAnchor,
@@ -909,7 +824,6 @@ utils.InstallFunctions(GlobalString.prototype, DONT_ENUM, [
 
 utils.Export(function(to) {
   to.ExpandReplacement = ExpandReplacement;
-  to.StringCharAt = StringCharAtJS;
   to.StringIndexOf = StringIndexOf;
   to.StringLastIndexOf = StringLastIndexOf;
   to.StringMatch = StringMatchJS;

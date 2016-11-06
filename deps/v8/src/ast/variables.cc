@@ -19,7 +19,6 @@ const char* Variable::Mode2String(VariableMode mode) {
     case CONST_LEGACY: return "CONST_LEGACY";
     case LET: return "LET";
     case CONST: return "CONST";
-    case IMPORT: return "IMPORT";
     case DYNAMIC: return "DYNAMIC";
     case DYNAMIC_GLOBAL: return "DYNAMIC_GLOBAL";
     case DYNAMIC_LOCAL: return "DYNAMIC_LOCAL";
@@ -41,7 +40,6 @@ Variable::Variable(Scope* scope, const AstRawString* name, VariableMode mode,
       index_(-1),
       initializer_position_(RelocInfo::kNoPosition),
       local_if_not_shadowed_(NULL),
-      is_from_eval_(false),
       force_context_allocation_(false),
       is_used_(false),
       initialization_flag_(initialization_flag),

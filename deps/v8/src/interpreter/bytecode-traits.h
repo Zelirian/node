@@ -30,16 +30,40 @@ OPERAND_TYPE_INFO_LIST(DECLARE_OPERAND_TYPE_INFO)
 
 template <OperandType>
 struct OperandTraits {
-  typedef OperandTypeInfoTraits<OperandTypeInfo::kNone> TypeInfo;
+  typedef OperandTypeInfoTraits<OperandTypeInfo::kNone> TypeInfoTraits;
+  static const OperandTypeInfo kOperandTypeInfo = OperandTypeInfo::kNone;
 };
 
-#define DECLARE_OPERAND_TYPE_TRAITS(Name, InfoType)   \
-  template <>                                         \
-  struct OperandTraits<OperandType::k##Name> {        \
-    typedef OperandTypeInfoTraits<InfoType> TypeInfo; \
+#define DECLARE_OPERAND_TYPE_TRAITS(Name, InfoType)           \
+  template <>                                                 \
+  struct OperandTraits<OperandType::k##Name> {                \
+    typedef OperandTypeInfoTraits<InfoType> TypeInfoTraits;   \
+    static const OperandTypeInfo kOperandTypeInfo = InfoType; \
   };
 OPERAND_TYPE_LIST(DECLARE_OPERAND_TYPE_TRAITS)
 #undef DECLARE_OPERAND_TYPE_TRAITS
+
+template <OperandType operand_type, OperandScale operand_scale>
+struct OperandScaler {
+  template <bool, OperandSize, OperandScale>
+  struct Helper {
+    static const int kSize = 0;
+  };
+  template <OperandSize size, OperandScale scale>
+  struct Helper<false, size, scale> {
+    static const int kSize = static_cast<int>(size);
+  };
+  template <OperandSize size, OperandScale scale>
+  struct Helper<true, size, scale> {
+    static const int kSize = static_cast<int>(size) * static_cast<int>(scale);
+  };
+
+  static const int kSize =
+      Helper<OperandTraits<operand_type>::TypeInfoTraits::kIsScalable,
+             OperandTraits<operand_type>::TypeInfoTraits::kUnscaledSize,
+             operand_scale>::kSize;
+  static const OperandSize kOperandSize = static_cast<OperandSize>(kSize);
+};
 
 template <OperandType>
 struct RegisterOperandTraits {
@@ -61,11 +85,38 @@ template <AccumulatorUse accumulator_use, OperandType operand_0,
           OperandType operand_1, OperandType operand_2, OperandType operand_3>
 struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2,
                       operand_3> {
-  static OperandType GetOperandType(int i) {
-    DCHECK(0 <= i && i < kOperandCount);
-    const OperandType kOperands[] = {operand_0, operand_1, operand_2,
-                                     operand_3};
-    return kOperands[i];
+  static const OperandType* GetOperandTypes() {
+    static const OperandType operand_types[] = {operand_0, operand_1, operand_2,
+                                                operand_3, OperandType::kNone};
+    return operand_types;
+  }
+
+  static const OperandTypeInfo* GetOperandTypeInfos() {
+    static const OperandTypeInfo operand_type_infos[] = {
+        OperandTraits<operand_0>::kOperandTypeInfo,
+        OperandTraits<operand_1>::kOperandTypeInfo,
+        OperandTraits<operand_2>::kOperandTypeInfo,
+        OperandTraits<operand_3>::kOperandTypeInfo, OperandTypeInfo::kNone};
+    return operand_type_infos;
+  }
+
+  static const OperandSize* GetOperandSizes(OperandScale operand_scale) {
+    switch (operand_scale) {
+#define CASE(Name, _)                                                  \
+  case OperandScale::k##Name: {                                        \
+    static const OperandSize kOperandSizes[] = {                       \
+        OperandScaler<operand_0, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_1, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_2, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_3, OperandScale::k##Name>::kOperandSize, \
+    };                                                                 \
+    return kOperandSizes;                                              \
+  }
+      OPERAND_SCALE_LIST(CASE)
+#undef CASE
+    }
+    UNREACHABLE();
+    return nullptr;
   }
 
   template <OperandType ot>
@@ -75,10 +126,10 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2,
   }
 
   static inline bool IsScalable() {
-    return (OperandTraits<operand_0>::TypeInfo::kIsScalable |
-            OperandTraits<operand_1>::TypeInfo::kIsScalable |
-            OperandTraits<operand_2>::TypeInfo::kIsScalable |
-            OperandTraits<operand_3>::TypeInfo::kIsScalable);
+    return (OperandTraits<operand_0>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_1>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_2>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_3>::TypeInfoTraits::kIsScalable);
   }
 
   static const AccumulatorUse kAccumulatorUse = accumulator_use;
@@ -98,10 +149,36 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2,
 template <AccumulatorUse accumulator_use, OperandType operand_0,
           OperandType operand_1, OperandType operand_2>
 struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2> {
-  static inline OperandType GetOperandType(int i) {
-    DCHECK(0 <= i && i <= 2);
-    const OperandType kOperands[] = {operand_0, operand_1, operand_2};
-    return kOperands[i];
+  static const OperandType* GetOperandTypes() {
+    static const OperandType operand_types[] = {operand_0, operand_1, operand_2,
+                                                OperandType::kNone};
+    return operand_types;
+  }
+
+  static const OperandTypeInfo* GetOperandTypeInfos() {
+    static const OperandTypeInfo operand_type_infos[] = {
+        OperandTraits<operand_0>::kOperandTypeInfo,
+        OperandTraits<operand_1>::kOperandTypeInfo,
+        OperandTraits<operand_2>::kOperandTypeInfo, OperandTypeInfo::kNone};
+    return operand_type_infos;
+  }
+
+  static const OperandSize* GetOperandSizes(OperandScale operand_scale) {
+    switch (operand_scale) {
+#define CASE(Name, _)                                                  \
+  case OperandScale::k##Name: {                                        \
+    static const OperandSize kOperandSizes[] = {                       \
+        OperandScaler<operand_0, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_1, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_2, OperandScale::k##Name>::kOperandSize, \
+    };                                                                 \
+    return kOperandSizes;                                              \
+  }
+      OPERAND_SCALE_LIST(CASE)
+#undef CASE
+    }
+    UNREACHABLE();
+    return nullptr;
   }
 
   template <OperandType ot>
@@ -110,9 +187,9 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2> {
   }
 
   static inline bool IsScalable() {
-    return (OperandTraits<operand_0>::TypeInfo::kIsScalable |
-            OperandTraits<operand_1>::TypeInfo::kIsScalable |
-            OperandTraits<operand_2>::TypeInfo::kIsScalable);
+    return (OperandTraits<operand_0>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_1>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_2>::TypeInfoTraits::kIsScalable);
   }
 
   static const AccumulatorUse kAccumulatorUse = accumulator_use;
@@ -130,10 +207,34 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1, operand_2> {
 template <AccumulatorUse accumulator_use, OperandType operand_0,
           OperandType operand_1>
 struct BytecodeTraits<accumulator_use, operand_0, operand_1> {
-  static inline OperandType GetOperandType(int i) {
-    DCHECK(0 <= i && i < kOperandCount);
-    const OperandType kOperands[] = {operand_0, operand_1};
-    return kOperands[i];
+  static const OperandType* GetOperandTypes() {
+    static const OperandType operand_types[] = {operand_0, operand_1,
+                                                OperandType::kNone};
+    return operand_types;
+  }
+
+  static const OperandTypeInfo* GetOperandTypeInfos() {
+    static const OperandTypeInfo operand_type_infos[] = {
+        OperandTraits<operand_0>::kOperandTypeInfo,
+        OperandTraits<operand_1>::kOperandTypeInfo, OperandTypeInfo::kNone};
+    return operand_type_infos;
+  }
+
+  static const OperandSize* GetOperandSizes(OperandScale operand_scale) {
+    switch (operand_scale) {
+#define CASE(Name, _)                                                  \
+  case OperandScale::k##Name: {                                        \
+    static const OperandSize kOperandSizes[] = {                       \
+        OperandScaler<operand_0, OperandScale::k##Name>::kOperandSize, \
+        OperandScaler<operand_1, OperandScale::k##Name>::kOperandSize, \
+    };                                                                 \
+    return kOperandSizes;                                              \
+  }
+      OPERAND_SCALE_LIST(CASE)
+#undef CASE
+    }
+    UNREACHABLE();
+    return nullptr;
   }
 
   template <OperandType ot>
@@ -142,8 +243,8 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1> {
   }
 
   static inline bool IsScalable() {
-    return (OperandTraits<operand_0>::TypeInfo::kIsScalable |
-            OperandTraits<operand_1>::TypeInfo::kIsScalable);
+    return (OperandTraits<operand_0>::TypeInfoTraits::kIsScalable |
+            OperandTraits<operand_1>::TypeInfoTraits::kIsScalable);
   }
 
   static const AccumulatorUse kAccumulatorUse = accumulator_use;
@@ -158,9 +259,31 @@ struct BytecodeTraits<accumulator_use, operand_0, operand_1> {
 
 template <AccumulatorUse accumulator_use, OperandType operand_0>
 struct BytecodeTraits<accumulator_use, operand_0> {
-  static inline OperandType GetOperandType(int i) {
-    DCHECK(i == 0);
-    return operand_0;
+  static const OperandType* GetOperandTypes() {
+    static const OperandType operand_types[] = {operand_0, OperandType::kNone};
+    return operand_types;
+  }
+
+  static const OperandTypeInfo* GetOperandTypeInfos() {
+    static const OperandTypeInfo operand_type_infos[] = {
+        OperandTraits<operand_0>::kOperandTypeInfo, OperandTypeInfo::kNone};
+    return operand_type_infos;
+  }
+
+  static const OperandSize* GetOperandSizes(OperandScale operand_scale) {
+    switch (operand_scale) {
+#define CASE(Name, _)                                                  \
+  case OperandScale::k##Name: {                                        \
+    static const OperandSize kOperandSizes[] = {                       \
+        OperandScaler<operand_0, OperandScale::k##Name>::kOperandSize, \
+    };                                                                 \
+    return kOperandSizes;                                              \
+  }
+      OPERAND_SCALE_LIST(CASE)
+#undef CASE
+    }
+    UNREACHABLE();
+    return nullptr;
   }
 
   template <OperandType ot>
@@ -169,7 +292,7 @@ struct BytecodeTraits<accumulator_use, operand_0> {
   }
 
   static inline bool IsScalable() {
-    return OperandTraits<operand_0>::TypeInfo::kIsScalable;
+    return OperandTraits<operand_0>::TypeInfoTraits::kIsScalable;
   }
 
   static const AccumulatorUse kAccumulatorUse = accumulator_use;
@@ -182,9 +305,19 @@ struct BytecodeTraits<accumulator_use, operand_0> {
 
 template <AccumulatorUse accumulator_use>
 struct BytecodeTraits<accumulator_use> {
-  static inline OperandType GetOperandType(int i) {
-    UNREACHABLE();
-    return OperandType::kNone;
+  static const OperandType* GetOperandTypes() {
+    static const OperandType operand_types[] = {OperandType::kNone};
+    return operand_types;
+  }
+
+  static const OperandTypeInfo* GetOperandTypeInfos() {
+    static const OperandTypeInfo operand_type_infos[] = {
+        OperandTypeInfo::kNone};
+    return operand_type_infos;
+  }
+
+  static const OperandSize* GetOperandSizes(OperandScale operand_scale) {
+    return nullptr;
   }
 
   template <OperandType ot>
@@ -200,37 +333,22 @@ struct BytecodeTraits<accumulator_use> {
   static const int kRegisterOperandBitmap = 0;
 };
 
-template <bool>
-struct OperandScaler {
-  static int Multiply(int size, int operand_scale) { return 0; }
-};
-
-template <>
-struct OperandScaler<false> {
-  static int Multiply(int size, int operand_scale) { return size; }
-};
-
-template <>
-struct OperandScaler<true> {
-  static int Multiply(int size, int operand_scale) {
-    return size * operand_scale;
-  }
-};
-
 static OperandSize ScaledOperandSize(OperandType operand_type,
                                      OperandScale operand_scale) {
+  STATIC_ASSERT(static_cast<int>(OperandScale::kQuadruple) == 4 &&
+                OperandScale::kLast == OperandScale::kQuadruple);
+  int index = static_cast<int>(operand_scale) >> 1;
   switch (operand_type) {
-#define CASE(Name, TypeInfo)                                                   \
-  case OperandType::k##Name: {                                                 \
-    OperandSize base_size = OperandTypeInfoTraits<TypeInfo>::kUnscaledSize;    \
-    int size =                                                                 \
-        OperandScaler<OperandTypeInfoTraits<TypeInfo>::kIsScalable>::Multiply( \
-            static_cast<int>(base_size), static_cast<int>(operand_scale));     \
-    OperandSize operand_size = static_cast<OperandSize>(size);                 \
-    DCHECK(operand_size == OperandSize::kByte ||                               \
-           operand_size == OperandSize::kShort ||                              \
-           operand_size == OperandSize::kQuad);                                \
-    return operand_size;                                                       \
+#define CASE(Name, TypeInfo)                                    \
+  case OperandType::k##Name: {                                  \
+    static const OperandSize kOperandSizes[] = {                \
+        OperandScaler<OperandType::k##Name,                     \
+                      OperandScale::kSingle>::kOperandSize,     \
+        OperandScaler<OperandType::k##Name,                     \
+                      OperandScale::kDouble>::kOperandSize,     \
+        OperandScaler<OperandType::k##Name,                     \
+                      OperandScale::kQuadruple>::kOperandSize}; \
+    return kOperandSizes[index];                                \
   }
     OPERAND_TYPE_LIST(CASE)
 #undef CASE

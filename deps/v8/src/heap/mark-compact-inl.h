@@ -12,17 +12,6 @@
 namespace v8 {
 namespace internal {
 
-inline std::vector<Page*>& MarkCompactCollector::sweeping_list(Space* space) {
-  if (space == heap()->old_space()) {
-    return sweeping_list_old_space_;
-  } else if (space == heap()->code_space()) {
-    return sweeping_list_code_space_;
-  }
-  DCHECK_EQ(space, heap()->map_space());
-  return sweeping_list_map_space_;
-}
-
-
 void MarkCompactCollector::PushBlack(HeapObject* obj) {
   DCHECK(Marking::IsBlack(Marking::MarkBitFrom(obj)));
   if (marking_deque_.Push(obj)) {
@@ -90,7 +79,7 @@ void CodeFlusher::AddCandidate(SharedFunctionInfo* shared_info) {
 
 void CodeFlusher::AddCandidate(JSFunction* function) {
   DCHECK(function->code() == function->shared()->code());
-  if (function->next_function_link()->IsUndefined()) {
+  if (function->next_function_link()->IsUndefined(isolate_)) {
     SetNextCandidate(function, jsfunction_candidates_head_);
     jsfunction_candidates_head_ = function;
   }
@@ -116,7 +105,7 @@ void CodeFlusher::SetNextCandidate(JSFunction* candidate,
 
 
 void CodeFlusher::ClearNextCandidate(JSFunction* candidate, Object* undefined) {
-  DCHECK(undefined->IsUndefined());
+  DCHECK(undefined->IsUndefined(candidate->GetIsolate()));
   candidate->set_next_function_link(undefined, SKIP_WRITE_BARRIER);
 }
 

@@ -111,13 +111,11 @@ class LCodeGen: public LCodeGenBase {
 #undef DECLARE_DO
 
  private:
-  LanguageMode language_mode() const { return info()->language_mode(); }
-
   LPlatformChunk* chunk() const { return chunk_; }
   Scope* scope() const { return scope_; }
   HGraph* graph() const { return chunk()->graph(); }
 
-  XMMRegister double_scratch0() const { return xmm0; }
+  XMMRegister double_scratch0() const { return kScratchDoubleReg; }
 
   void EmitClassOfTest(Label* if_true,
                        Label* if_false,

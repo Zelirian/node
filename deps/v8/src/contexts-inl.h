@@ -56,8 +56,9 @@ Context* Context::previous() {
 }
 void Context::set_previous(Context* context) { set(PREVIOUS_INDEX, context); }
 
+Object* Context::next_context_link() { return get(Context::NEXT_CONTEXT_LINK); }
 
-bool Context::has_extension() { return !extension()->IsTheHole(); }
+bool Context::has_extension() { return !extension()->IsTheHole(GetIsolate()); }
 HeapObject* Context::extension() {
   return HeapObject::cast(get(EXTENSION_INDEX));
 }

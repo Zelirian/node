@@ -20,18 +20,19 @@ class JSGraph;
 class MachineOperatorBuilder;
 class SimplifiedOperatorBuilder;
 
-
-class SimplifiedOperatorReducer final : public Reducer {
+class SimplifiedOperatorReducer final : public AdvancedReducer {
  public:
-  explicit SimplifiedOperatorReducer(JSGraph* jsgraph);
+  SimplifiedOperatorReducer(Editor* editor, JSGraph* jsgraph);
   ~SimplifiedOperatorReducer() final;
 
   Reduction Reduce(Node* node) final;
 
  private:
   Reduction ReduceReferenceEqual(Node* node);
+  Reduction ReduceTypeGuard(Node* node);
 
   Reduction Change(Node* node, const Operator* op, Node* a);
+  Reduction ReplaceBoolean(bool value);
   Reduction ReplaceFloat64(double value);
   Reduction ReplaceInt32(int32_t value);
   Reduction ReplaceUint32(uint32_t value) {

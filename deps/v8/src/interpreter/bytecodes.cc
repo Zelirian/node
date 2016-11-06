@@ -6,6 +6,7 @@
 
 #include <iomanip>
 
+#include "src/base/bits.h"
 #include "src/frames.h"
 #include "src/interpreter/bytecode-traits.h"
 #include "src/interpreter/interpreter.h"
@@ -74,15 +75,13 @@ const char* Bytecodes::OperandTypeToString(OperandType operand_type) {
 // static
 const char* Bytecodes::OperandScaleToString(OperandScale operand_scale) {
   switch (operand_scale) {
-    case OperandScale::kSingle:
-      return "Single";
-    case OperandScale::kDouble:
-      return "Double";
-    case OperandScale::kQuadruple:
-      return "Quadruple";
-    case OperandScale::kInvalid:
-      UNREACHABLE();
+#define CASE(Name, _)         \
+  case OperandScale::k##Name: \
+    return #Name;
+    OPERAND_SCALE_LIST(CASE)
+#undef CASE
   }
+  UNREACHABLE();
   return "";
 }
 
@@ -102,21 +101,12 @@ const char* Bytecodes::OperandSizeToString(OperandSize operand_size) {
   return "";
 }
 
-
-// static
-uint8_t Bytecodes::ToByte(Bytecode bytecode) {
-  DCHECK(bytecode <= Bytecode::kLast);
-  return static_cast<uint8_t>(bytecode);
-}
-
-
 // static
 Bytecode Bytecodes::FromByte(uint8_t value) {
   Bytecode bytecode = static_cast<Bytecode>(value);
   DCHECK(bytecode <= Bytecode::kLast);
   return bytecode;
 }
-
 
 // static
 Bytecode Bytecodes::GetDebugBreak(Bytecode bytecode) {
@@ -150,6 +140,10 @@ int Bytecodes::Size(Bytecode bytecode, OperandScale operand_scale) {
   return size;
 }
 
+// static
+size_t Bytecodes::ReturnCount(Bytecode bytecode) {
+  return bytecode == Bytecode::kReturn ? 1 : 0;
+}
 
 // static
 int Bytecodes::NumberOfOperands(Bytecode bytecode) {
@@ -164,7 +158,6 @@ int Bytecodes::NumberOfOperands(Bytecode bytecode) {
   UNREACHABLE();
   return 0;
 }
-
 
 // static
 int Bytecodes::NumberOfRegisterOperands(Bytecode bytecode) {
@@ -241,24 +234,130 @@ bool Bytecodes::WritesAccumulator(Bytecode bytecode) {
 }
 
 // static
+bool Bytecodes::WritesBooleanToAccumulator(Bytecode bytecode) {
+  switch (bytecode) {
+    case Bytecode::kLdaTrue:
+    case Bytecode::kLdaFalse:
+    case Bytecode::kToBooleanLogicalNot:
+    case Bytecode::kLogicalNot:
+    case Bytecode::kTestEqual:
+    case Bytecode::kTestNotEqual:
+    case Bytecode::kTestEqualStrict:
+    case Bytecode::kTestLessThan:
+    case Bytecode::kTestLessThanOrEqual:
+    case Bytecode::kTestGreaterThan:
+    case Bytecode::kTestGreaterThanOrEqual:
+    case Bytecode::kTestInstanceOf:
+    case Bytecode::kTestIn:
+    case Bytecode::kForInDone:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// static
+bool Bytecodes::IsAccumulatorLoadWithoutEffects(Bytecode bytecode) {
+  switch (bytecode) {
+    case Bytecode::kLdaZero:
+    case Bytecode::kLdaSmi:
+    case Bytecode::kLdaUndefined:
+    case Bytecode::kLdaNull:
+    case Bytecode::kLdaTheHole:
+    case Bytecode::kLdaTrue:
+    case Bytecode::kLdaFalse:
+    case Bytecode::kLdaConstant:
+    case Bytecode::kLdar:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// static
+bool Bytecodes::IsJumpWithoutEffects(Bytecode bytecode) {
+  return IsJump(bytecode) && !IsJumpIfToBoolean(bytecode);
+}
+
+// static
+bool Bytecodes::IsRegisterLoadWithoutEffects(Bytecode bytecode) {
+  switch (bytecode) {
+    case Bytecode::kMov:
+    case Bytecode::kPopContext:
+    case Bytecode::kPushContext:
+    case Bytecode::kStar:
+    case Bytecode::kLdrUndefined:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// static
+bool Bytecodes::IsWithoutExternalSideEffects(Bytecode bytecode) {
+  // These bytecodes only manipulate interpreter frame state and will
+  // never throw.
+  return (IsAccumulatorLoadWithoutEffects(bytecode) ||
+          IsRegisterLoadWithoutEffects(bytecode) ||
+          bytecode == Bytecode::kNop || IsJumpWithoutEffects(bytecode));
+}
+
+// static
 OperandType Bytecodes::GetOperandType(Bytecode bytecode, int i) {
+  DCHECK_LE(bytecode, Bytecode::kLast);
+  DCHECK_LT(i, NumberOfOperands(bytecode));
+  DCHECK_GE(i, 0);
+  return GetOperandTypes(bytecode)[i];
+}
+
+// static
+const OperandType* Bytecodes::GetOperandTypes(Bytecode bytecode) {
   DCHECK(bytecode <= Bytecode::kLast);
   switch (bytecode) {
 #define CASE(Name, ...)   \
   case Bytecode::k##Name: \
-    return BytecodeTraits<__VA_ARGS__>::GetOperandType(i);
+    return BytecodeTraits<__VA_ARGS__>::GetOperandTypes();
     BYTECODE_LIST(CASE)
 #undef CASE
   }
   UNREACHABLE();
-  return OperandType::kNone;
+  return nullptr;
+}
+
+// static
+const OperandTypeInfo* Bytecodes::GetOperandTypeInfos(Bytecode bytecode) {
+  DCHECK(bytecode <= Bytecode::kLast);
+  switch (bytecode) {
+#define CASE(Name, ...)   \
+  case Bytecode::k##Name: \
+    return BytecodeTraits<__VA_ARGS__>::GetOperandTypeInfos();
+    BYTECODE_LIST(CASE)
+#undef CASE
+  }
+  UNREACHABLE();
+  return nullptr;
 }
 
 // static
 OperandSize Bytecodes::GetOperandSize(Bytecode bytecode, int i,
                                       OperandScale operand_scale) {
-  OperandType op_type = GetOperandType(bytecode, i);
-  return ScaledOperandSize(op_type, operand_scale);
+  DCHECK_LT(i, NumberOfOperands(bytecode));
+  return GetOperandSizes(bytecode, operand_scale)[i];
+}
+
+// static
+const OperandSize* Bytecodes::GetOperandSizes(Bytecode bytecode,
+                                              OperandScale operand_scale) {
+  DCHECK(bytecode <= Bytecode::kLast);
+  switch (bytecode) {
+#define CASE(Name, ...)   \
+  case Bytecode::k##Name: \
+    return BytecodeTraits<__VA_ARGS__>::GetOperandSizes(operand_scale);
+    BYTECODE_LIST(CASE)
+#undef CASE
+  }
+  UNREACHABLE();
+  return nullptr;
 }
 
 // static
@@ -279,6 +378,7 @@ int Bytecodes::GetRegisterOperandBitmap(Bytecode bytecode) {
 // static
 int Bytecodes::GetOperandOffset(Bytecode bytecode, int i,
                                 OperandScale operand_scale) {
+  DCHECK_LT(i, Bytecodes::NumberOfOperands(bytecode));
   // TODO(oth): restore this to a statically determined constant.
   int offset = 1;
   for (int operand_index = 0; operand_index < i; ++operand_index) {
@@ -343,6 +443,31 @@ bool Bytecodes::IsJump(Bytecode bytecode) {
   return IsJumpImmediate(bytecode) || IsJumpConstant(bytecode);
 }
 
+// static
+bool Bytecodes::IsJumpIfToBoolean(Bytecode bytecode) {
+  return bytecode == Bytecode::kJumpIfToBooleanTrue ||
+         bytecode == Bytecode::kJumpIfToBooleanFalse ||
+         bytecode == Bytecode::kJumpIfToBooleanTrueConstant ||
+         bytecode == Bytecode::kJumpIfToBooleanFalseConstant;
+}
+
+// static
+Bytecode Bytecodes::GetJumpWithoutToBoolean(Bytecode bytecode) {
+  switch (bytecode) {
+    case Bytecode::kJumpIfToBooleanTrue:
+      return Bytecode::kJumpIfTrue;
+    case Bytecode::kJumpIfToBooleanFalse:
+      return Bytecode::kJumpIfFalse;
+    case Bytecode::kJumpIfToBooleanTrueConstant:
+      return Bytecode::kJumpIfTrueConstant;
+    case Bytecode::kJumpIfToBooleanFalseConstant:
+      return Bytecode::kJumpIfFalseConstant;
+    default:
+      break;
+  }
+  UNREACHABLE();
+  return Bytecode::kIllegal;
+}
 
 // static
 bool Bytecodes::IsCallOrNew(Bytecode bytecode) {
@@ -368,6 +493,11 @@ bool Bytecodes::IsDebugBreak(Bytecode bytecode) {
       break;
   }
   return false;
+}
+
+// static
+bool Bytecodes::IsLdarOrStar(Bytecode bytecode) {
+  return bytecode == Bytecode::kLdar || bytecode == Bytecode::kStar;
 }
 
 // static
@@ -461,11 +591,29 @@ bool Bytecodes::IsRegisterOutputOperandType(OperandType operand_type) {
 }
 
 // static
+int Bytecodes::GetNumberOfRegistersRepresentedBy(OperandType operand_type) {
+  switch (operand_type) {
+    case OperandType::kMaybeReg:
+    case OperandType::kReg:
+    case OperandType::kRegOut:
+      return 1;
+    case OperandType::kRegPair:
+    case OperandType::kRegOutPair:
+      return 2;
+    case OperandType::kRegOutTriple:
+      return 3;
+    default:
+      UNREACHABLE();
+  }
+  return 0;
+}
+
+// static
 bool Bytecodes::IsUnsignedOperandType(OperandType operand_type) {
   switch (operand_type) {
 #define CASE(Name, _)        \
   case OperandType::k##Name: \
-    return OperandTraits<OperandType::k##Name>::TypeInfo::kIsUnsigned;
+    return OperandTraits<OperandType::k##Name>::TypeInfoTraits::kIsUnsigned;
     OPERAND_TYPE_LIST(CASE)
 #undef CASE
   }
@@ -474,10 +622,25 @@ bool Bytecodes::IsUnsignedOperandType(OperandType operand_type) {
 }
 
 // static
-OperandScale Bytecodes::NextOperandScale(OperandScale operand_scale) {
-  DCHECK(operand_scale >= OperandScale::kSingle &&
-         operand_scale <= OperandScale::kMaxValid);
-  return static_cast<OperandScale>(2 * static_cast<int>(operand_scale));
+OperandSize Bytecodes::SizeForSignedOperand(int value) {
+  if (value >= kMinInt8 && value <= kMaxInt8) {
+    return OperandSize::kByte;
+  } else if (value >= kMinInt16 && value <= kMaxInt16) {
+    return OperandSize::kShort;
+  } else {
+    return OperandSize::kQuad;
+  }
+}
+
+// static
+OperandSize Bytecodes::SizeForUnsignedOperand(uint32_t value) {
+  if (value <= kMaxUInt8) {
+    return OperandSize::kByte;
+  } else if (value <= kMaxUInt16) {
+    return OperandSize::kShort;
+  } else {
+    return OperandSize::kQuad;
+  }
 }
 
 // static
@@ -574,6 +737,7 @@ std::ostream& Bytecodes::Decode(std::ostream& os, const uint8_t* bytecode_start,
         break;
       case interpreter::OperandType::kIdx:
       case interpreter::OperandType::kRuntimeId:
+      case interpreter::OperandType::kIntrinsicId:
         os << "["
            << DecodeUnsignedOperand(operand_start, op_type, operand_scale)
            << "]";
@@ -645,21 +809,33 @@ std::ostream& operator<<(std::ostream& os, const OperandType& operand_type) {
 }
 
 static const int kLastParamRegisterIndex =
-    -InterpreterFrameConstants::kLastParamFromRegisterPointer / kPointerSize;
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     InterpreterFrameConstants::kLastParamFromFp) /
+    kPointerSize;
 static const int kFunctionClosureRegisterIndex =
-    -InterpreterFrameConstants::kFunctionFromRegisterPointer / kPointerSize;
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     StandardFrameConstants::kFunctionOffset) /
+    kPointerSize;
 static const int kCurrentContextRegisterIndex =
-    -InterpreterFrameConstants::kContextFromRegisterPointer / kPointerSize;
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     StandardFrameConstants::kContextOffset) /
+    kPointerSize;
 static const int kNewTargetRegisterIndex =
-    -InterpreterFrameConstants::kNewTargetFromRegisterPointer / kPointerSize;
-
-bool Register::is_byte_operand() const {
-  return index_ >= -kMaxInt8 && index_ <= -kMinInt8;
-}
-
-bool Register::is_short_operand() const {
-  return index_ >= -kMaxInt16 && index_ <= -kMinInt16;
-}
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     InterpreterFrameConstants::kNewTargetFromFp) /
+    kPointerSize;
+static const int kBytecodeArrayRegisterIndex =
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     InterpreterFrameConstants::kBytecodeArrayFromFp) /
+    kPointerSize;
+static const int kBytecodeOffsetRegisterIndex =
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     InterpreterFrameConstants::kBytecodeOffsetFromFp) /
+    kPointerSize;
+static const int kCallerPCOffsetRegisterIndex =
+    (InterpreterFrameConstants::kRegisterFileFromFp -
+     InterpreterFrameConstants::kCallerPCOffsetFromFp) /
+    kPointerSize;
 
 Register Register::FromParameterIndex(int index, int parameter_count) {
   DCHECK_GE(index, 0);
@@ -669,38 +845,63 @@ Register Register::FromParameterIndex(int index, int parameter_count) {
   return Register(register_index);
 }
 
-
 int Register::ToParameterIndex(int parameter_count) const {
   DCHECK(is_parameter());
   return index() - kLastParamRegisterIndex + parameter_count - 1;
 }
 
-
 Register Register::function_closure() {
   return Register(kFunctionClosureRegisterIndex);
 }
-
 
 bool Register::is_function_closure() const {
   return index() == kFunctionClosureRegisterIndex;
 }
 
-
 Register Register::current_context() {
   return Register(kCurrentContextRegisterIndex);
 }
-
 
 bool Register::is_current_context() const {
   return index() == kCurrentContextRegisterIndex;
 }
 
-
 Register Register::new_target() { return Register(kNewTargetRegisterIndex); }
-
 
 bool Register::is_new_target() const {
   return index() == kNewTargetRegisterIndex;
+}
+
+Register Register::bytecode_array() {
+  return Register(kBytecodeArrayRegisterIndex);
+}
+
+bool Register::is_bytecode_array() const {
+  return index() == kBytecodeArrayRegisterIndex;
+}
+
+Register Register::bytecode_offset() {
+  return Register(kBytecodeOffsetRegisterIndex);
+}
+
+bool Register::is_bytecode_offset() const {
+  return index() == kBytecodeOffsetRegisterIndex;
+}
+
+// static
+Register Register::virtual_accumulator() {
+  return Register(kCallerPCOffsetRegisterIndex);
+}
+
+OperandSize Register::SizeOfOperand() const {
+  int32_t operand = ToOperand();
+  if (operand >= kMinInt8 && operand <= kMaxInt8) {
+    return OperandSize::kByte;
+  } else if (operand >= kMinInt16 && operand <= kMaxInt16) {
+    return OperandSize::kShort;
+  } else {
+    return OperandSize::kQuad;
+  }
 }
 
 bool Register::AreContiguous(Register reg1, Register reg2, Register reg3,

@@ -25,7 +25,7 @@ static int offsets[] = {0,   1,   2,    3,    4,     30,      31,  32,
 TEST_F(SourcePositionTableTest, EncodeStatement) {
   SourcePositionTableBuilder builder(isolate(), zone());
   for (int i = 0; i < arraysize(offsets); i++) {
-    builder.AddStatementPosition(offsets[i], offsets[i]);
+    builder.AddPosition(offsets[i], offsets[i], true);
   }
 
   // To test correctness, we rely on the assertions in ToSourcePositionTable().
@@ -36,8 +36,8 @@ TEST_F(SourcePositionTableTest, EncodeStatement) {
 TEST_F(SourcePositionTableTest, EncodeStatementDuplicates) {
   SourcePositionTableBuilder builder(isolate(), zone());
   for (int i = 0; i < arraysize(offsets); i++) {
-    builder.AddStatementPosition(offsets[i], offsets[i]);
-    builder.AddStatementPosition(offsets[i], offsets[i] + 1);
+    builder.AddPosition(offsets[i], offsets[i], true);
+    builder.AddPosition(offsets[i], offsets[i] + 1, true);
   }
 
   // To test correctness, we rely on the assertions in ToSourcePositionTable().
@@ -48,7 +48,7 @@ TEST_F(SourcePositionTableTest, EncodeStatementDuplicates) {
 TEST_F(SourcePositionTableTest, EncodeExpression) {
   SourcePositionTableBuilder builder(isolate(), zone());
   for (int i = 0; i < arraysize(offsets); i++) {
-    builder.AddExpressionPosition(offsets[i], offsets[i]);
+    builder.AddPosition(offsets[i], offsets[i], false);
   }
   CHECK(!builder.ToSourcePositionTable().is_null());
 }
@@ -56,23 +56,26 @@ TEST_F(SourcePositionTableTest, EncodeExpression) {
 TEST_F(SourcePositionTableTest, EncodeAscending) {
   SourcePositionTableBuilder builder(isolate(), zone());
 
-  int accumulator = 0;
+  int code_offset = 0;
+  int source_position = 0;
   for (int i = 0; i < arraysize(offsets); i++) {
-    accumulator += offsets[i];
+    code_offset += offsets[i];
+    source_position += offsets[i];
     if (i % 2) {
-      builder.AddStatementPosition(accumulator, accumulator);
+      builder.AddPosition(code_offset, source_position, true);
     } else {
-      builder.AddExpressionPosition(accumulator, accumulator);
+      builder.AddPosition(code_offset, source_position, false);
     }
   }
 
-  // Also test negative offsets:
+  // Also test negative offsets for source positions:
   for (int i = 0; i < arraysize(offsets); i++) {
-    accumulator -= offsets[i];
+    code_offset += offsets[i];
+    source_position -= offsets[i];
     if (i % 2) {
-      builder.AddStatementPosition(accumulator, accumulator);
+      builder.AddPosition(code_offset, source_position, true);
     } else {
-      builder.AddExpressionPosition(accumulator, accumulator);
+      builder.AddPosition(code_offset, source_position, false);
     }
   }
 

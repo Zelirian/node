@@ -25,19 +25,21 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Please keep this file in sync with BUILD.gn.
+
 {
   'variables': {
     'v8_code': 1,
     'generated_file': '<(SHARED_INTERMEDIATE_DIR)/resources.cc',
   },
-  'includes': ['../../build/toolchain.gypi', '../../build/features.gypi'],
+  'includes': ['../../gypfiles/toolchain.gypi', '../../gypfiles/features.gypi'],
   'targets': [
     {
       'target_name': 'cctest',
       'type': 'executable',
       'dependencies': [
         'resources',
-        '../../tools/gyp/v8.gyp:v8_libplatform',
+        '../../src/v8.gyp:v8_libplatform',
       ],
       'include_dirs': [
         '../..',
@@ -47,14 +49,14 @@
         'compiler/c-signature.h',
         'compiler/codegen-tester.cc',
         'compiler/codegen-tester.h',
+        'compiler/code-assembler-tester.h',
         'compiler/function-tester.h',
         'compiler/graph-builder-tester.h',
         'compiler/test-basic-block-profiler.cc',
         'compiler/test-branch-combine.cc',
-        'compiler/test-changes-lowering.cc',
-        'compiler/test-code-stub-assembler.cc',
         'compiler/test-gap-resolver.cc',
         'compiler/test-graph-visualizer.cc',
+        'compiler/test-code-assembler.cc',
         'compiler/test-instruction.cc',
         'compiler/test-js-context-specialization.cc',
         'compiler/test-js-constant-cache.cc',
@@ -68,7 +70,6 @@
         'compiler/test-node.cc',
         'compiler/test-operator.cc',
         'compiler/test-osr.cc',
-        'compiler/test-pipeline.cc',
         'compiler/test-representation-change.cc',
         'compiler/test-run-bytecode-graph-builder.cc',
         'compiler/test-run-calls-to-external-references.cc',
@@ -80,35 +81,45 @@
         'compiler/test-run-jsexceptions.cc',
         'compiler/test-run-jsobjects.cc',
         'compiler/test-run-jsops.cc',
+        'compiler/test-run-load-store.cc',
         'compiler/test-run-machops.cc',
         'compiler/test-run-native-calls.cc',
         'compiler/test-run-stackcheck.cc',
         'compiler/test-run-stubs.cc',
         'compiler/test-run-variables.cc',
+        'compiler/test-run-wasm-machops.cc',
         'compiler/test-simplified-lowering.cc',
         'cctest.cc',
         'expression-type-collector.cc',
         'expression-type-collector.h',
         'interpreter/interpreter-tester.cc',
+        'interpreter/source-position-matcher.cc',
+        'interpreter/source-position-matcher.h',
         'interpreter/test-bytecode-generator.cc',
         'interpreter/test-interpreter.cc',
         'interpreter/test-interpreter-intrinsics.cc',
+        'interpreter/test-source-positions.cc',
         'interpreter/bytecode-expectations-printer.cc',
         'interpreter/bytecode-expectations-printer.h',
         'gay-fixed.cc',
         'gay-precision.cc',
         'gay-shortest.cc',
         'heap/heap-tester.h',
+        'heap/heap-utils.cc',
+        'heap/heap-utils.h',
         'heap/test-alloc.cc',
+        'heap/test-array-buffer-tracker.cc',
         'heap/test-compaction.cc',
         'heap/test-heap.cc',
         'heap/test-incremental-marking.cc',
         'heap/test-lab.cc',
         'heap/test-mark-compact.cc',
+        'heap/test-page-promotion.cc',
         'heap/test-spaces.cc',
-        'heap/utils-inl.h',
+        'libsampler/test-sampler.cc',
         'print-extension.cc',
         'profiler-extension.cc',
+        'test-access-checks.cc',
         'test-accessors.cc',
         'test-api.cc',
         'test-api.h',
@@ -124,6 +135,9 @@
         'test-bignum-dtoa.cc',
         'test-bit-vector.cc',
         'test-circular-queue.cc',
+        'test-code-cache.cc',
+        'test-code-layout.cc',
+        'test-code-stub-assembler.cc',
         'test-compiler.cc',
         'test-constantpool.cc',
         'test-conversions.cc',
@@ -137,6 +151,7 @@
         'test-double.cc',
         'test-dtoa.cc',
         'test-elements-kind.cc',
+        'test-eh-frame-hdr.cc',
         'test-fast-dtoa.cc',
         'test-feedback-vector.cc',
         'test-field-type-tracking.cc',
@@ -155,9 +170,7 @@
         'test-liveedit.cc',
         'test-lockers.cc',
         'test-log.cc',
-        'test-microtask-delivery.cc',
         'test-mementos.cc',
-        'test-object-observe.cc',
         'test-parsing.cc',
         'test-platform.cc',
         'test-profile-generator.cc',
@@ -178,11 +191,11 @@
         'test-transitions.cc',
         'test-typedarrays.cc',
         'test-types.cc',
-        'test-typing-reset.cc',
         'test-unbound-queue.cc',
         'test-unboxed-doubles.cc',
         'test-unique.cc',
         'test-unscopables-hidden-prototype.cc',
+        'test-usecounters.cc',
         'test-utils.cc',
         'test-version.cc',
         'test-weakmaps.cc',
@@ -190,9 +203,15 @@
         'trace-extension.cc',
         'wasm/test-run-wasm.cc',
         'wasm/test-run-wasm-64.cc',
+        'wasm/test-run-wasm-asmjs.cc',
+        'wasm/test-run-wasm-interpreter.cc',
         'wasm/test-run-wasm-js.cc',
         'wasm/test-run-wasm-module.cc',
         'wasm/test-signatures.h',
+        'wasm/test-wasm-function-name-table.cc',
+        'wasm/test-run-wasm-relocation.cc',
+        'wasm/test-wasm-stack.cc',
+        'wasm/test-wasm-trap-position.cc',
         'wasm/wasm-run-utils.h',
       ],
       'conditions': [
@@ -269,6 +288,15 @@
             'test-disasm-ppc.cc'
           ],
         }],
+        ['v8_target_arch=="mips"', {
+          'sources': [  ### gcmole(arch:mips) ###
+            'test-assembler-mips.cc',
+            'test-code-stubs.cc',
+            'test-code-stubs-mips.cc',
+            'test-disasm-mips.cc',
+            'test-macro-assembler-mips.cc'
+          ],
+        }],
         ['v8_target_arch=="mipsel"', {
           'sources': [  ### gcmole(arch:mipsel) ###
             'test-assembler-mips.cc',
@@ -278,8 +306,17 @@
             'test-macro-assembler-mips.cc'
           ],
         }],
+        ['v8_target_arch=="mips64"', {
+          'sources': [  ### gcmole(arch:mips64) ###
+            'test-assembler-mips64.cc',
+            'test-code-stubs.cc',
+            'test-code-stubs-mips64.cc',
+            'test-disasm-mips64.cc',
+            'test-macro-assembler-mips64.cc'
+          ],
+        }],
         ['v8_target_arch=="mips64el"', {
-          'sources': [
+          'sources': [  ### gcmole(arch:mips64el) ###
             'test-assembler-mips64.cc',
             'test-code-stubs.cc',
             'test-code-stubs-mips64.cc',
@@ -327,9 +364,9 @@
         ['component=="shared_library"', {
           # cctest can't be built against a shared library, so we need to
           # depend on the underlying static target in that case.
-          'dependencies': ['../../tools/gyp/v8.gyp:v8_maybe_snapshot'],
+          'dependencies': ['../../src/v8.gyp:v8_maybe_snapshot'],
         }, {
-          'dependencies': ['../../tools/gyp/v8.gyp:v8'],
+          'dependencies': ['../../src/v8.gyp:v8'],
         }],
       ],
     },
@@ -372,14 +409,14 @@
       'target_name': 'generate-bytecode-expectations',
       'type': 'executable',
       'dependencies': [
-        '../../tools/gyp/v8.gyp:v8_libplatform',
+        '../../src/v8.gyp:v8_libplatform',
       ],
       'conditions': [
         ['component=="shared_library"', {
           # Same as cctest, we need to depend on the underlying static target.
-          'dependencies': ['../../tools/gyp/v8.gyp:v8_maybe_snapshot'],
+          'dependencies': ['../../src/v8.gyp:v8_maybe_snapshot'],
         }, {
-          'dependencies': ['../../tools/gyp/v8.gyp:v8'],
+          'dependencies': ['../../src/v8.gyp:v8'],
         }],
       ],
       'include_dirs+': [
@@ -402,7 +439,7 @@
             'cctest',
           ],
           'includes': [
-            '../../build/isolate.gypi',
+            '../../gypfiles/isolate.gypi',
           ],
           'sources': [
             'cctest_exe.isolate',
@@ -415,7 +452,7 @@
             'cctest_exe_run',
           ],
           'includes': [
-            '../../build/isolate.gypi',
+            '../../gypfiles/isolate.gypi',
           ],
           'sources': [
             'cctest.isolate',

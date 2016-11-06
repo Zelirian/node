@@ -27,7 +27,7 @@
 
 #include "test/cctest/trace-extension.h"
 
-#include "src/profiler/sampler.h"
+#include "src/profiler/tick-sample.h"
 #include "src/vm-state-inl.h"
 #include "test/cctest/cctest.h"
 
@@ -86,7 +86,7 @@ Address TraceExtension::GetFP(const v8::FunctionCallbackInfo<v8::Value>& args) {
 #else
 #error Host architecture is neither 32-bit nor 64-bit.
 #endif
-  printf("Trace: %p\n", fp);
+  printf("Trace: %p\n", static_cast<void*>(fp));
   return fp;
 }
 

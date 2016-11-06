@@ -84,6 +84,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kSSEFloat64InsertLowWord32:
     case kSSEFloat64InsertHighWord32:
     case kSSEFloat64LoadLowWord32:
+    case kSSEFloat64SilenceNaN:
     case kAVXFloat32Add:
     case kAVXFloat32Sub:
     case kAVXFloat32Mul:
@@ -126,6 +127,11 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32PushFloat64:
     case kIA32Poke:
       return kHasSideEffect;
+
+    case kIA32Xchgb:
+    case kIA32Xchgw:
+    case kIA32Xchgl:
+      return kIsLoadOperation | kHasSideEffect;
 
 #define CASE(Name) case k##Name:
     COMMON_ARCH_OPCODE_LIST(CASE)

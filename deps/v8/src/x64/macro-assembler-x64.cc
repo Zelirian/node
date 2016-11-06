@@ -489,7 +489,7 @@ void MacroAssembler::RecordWriteCodeEntryField(Register js_function,
   // easier.
   DCHECK(js_function.is(rdi));
   DCHECK(code_entry.is(rcx));
-  DCHECK(scratch.is(rax));
+  DCHECK(scratch.is(r15));
 
   // Since a code entry (value) is always in old space, we don't need to update
   // remembered set. If incremental marking is off, there is nothing for us to
@@ -537,13 +537,13 @@ void MacroAssembler::RecordWriteCodeEntryField(Register js_function,
     DCHECK(arg_reg_2.is(rdx) && arg_reg_3.is(r8));
 
     movp(arg_reg_1, js_function);  // rcx gets rdi.
-    movp(arg_reg_2, dst);          // rdx gets rax.
+    movp(arg_reg_2, dst);          // rdx gets r15.
   } else {
     // AMD64 calling convention.
     DCHECK(arg_reg_1.is(rdi) && arg_reg_2.is(rsi) && arg_reg_3.is(rdx));
 
     // rdi is already loaded with js_function.
-    movp(arg_reg_2, dst);  // rsi gets rax.
+    movp(arg_reg_2, dst);  // rsi gets r15.
   }
   Move(arg_reg_3, ExternalReference::isolate_address(isolate()));
 
@@ -1113,15 +1113,6 @@ void MacroAssembler::Set(Register dst, int64_t x) {
     movq(dst, Immediate(static_cast<int32_t>(x)));
   } else {
     movq(dst, x);
-  }
-}
-
-void MacroAssembler::Set(Register dst, int64_t x, RelocInfo::Mode rmode) {
-  if (rmode == RelocInfo::WASM_MEMORY_REFERENCE) {
-    DCHECK(x != 0);
-    movq(dst, x, rmode);
-  } else {
-    DCHECK(RelocInfo::IsNone(rmode));
   }
 }
 
@@ -3268,12 +3259,12 @@ void MacroAssembler::Pinsrd(XMMRegister dst, Register src, int8_t imm8) {
     pinsrd(dst, src, imm8);
     return;
   }
-  Movd(xmm0, src);
+  Movd(kScratchDoubleReg, src);
   if (imm8 == 1) {
-    punpckldq(dst, xmm0);
+    punpckldq(dst, kScratchDoubleReg);
   } else {
     DCHECK_EQ(0, imm8);
-    Movss(dst, xmm0);
+    Movss(dst, kScratchDoubleReg);
   }
 }
 
@@ -3285,12 +3276,12 @@ void MacroAssembler::Pinsrd(XMMRegister dst, const Operand& src, int8_t imm8) {
     pinsrd(dst, src, imm8);
     return;
   }
-  Movd(xmm0, src);
+  Movd(kScratchDoubleReg, src);
   if (imm8 == 1) {
-    punpckldq(dst, xmm0);
+    punpckldq(dst, kScratchDoubleReg);
   } else {
     DCHECK_EQ(0, imm8);
-    Movss(dst, xmm0);
+    Movss(dst, kScratchDoubleReg);
   }
 }
 
@@ -3752,15 +3743,15 @@ void MacroAssembler::SlowTruncateToI(Register result_reg,
 void MacroAssembler::TruncateHeapNumberToI(Register result_reg,
                                            Register input_reg) {
   Label done;
-  Movsd(xmm0, FieldOperand(input_reg, HeapNumber::kValueOffset));
-  Cvttsd2siq(result_reg, xmm0);
+  Movsd(kScratchDoubleReg, FieldOperand(input_reg, HeapNumber::kValueOffset));
+  Cvttsd2siq(result_reg, kScratchDoubleReg);
   cmpq(result_reg, Immediate(1));
   j(no_overflow, &done, Label::kNear);
 
   // Slow case.
   if (input_reg.is(result_reg)) {
     subp(rsp, Immediate(kDoubleSize));
-    Movsd(MemOperand(rsp, 0), xmm0);
+    Movsd(MemOperand(rsp, 0), kScratchDoubleReg);
     SlowTruncateToI(result_reg, rsp, 0);
     addp(rsp, Immediate(kDoubleSize));
   } else {
@@ -3797,8 +3788,8 @@ void MacroAssembler::DoubleToI(Register result_reg, XMMRegister input_reg,
                                Label* lost_precision, Label* is_nan,
                                Label* minus_zero, Label::Distance dst) {
   Cvttsd2si(result_reg, input_reg);
-  Cvtlsi2sd(xmm0, result_reg);
-  Ucomisd(xmm0, input_reg);
+  Cvtlsi2sd(kScratchDoubleReg, result_reg);
+  Ucomisd(kScratchDoubleReg, input_reg);
   j(not_equal, lost_precision, dst);
   j(parity_even, is_nan, dst);  // NaN.
   if (minus_zero_mode == FAIL_ON_MINUS_ZERO) {
@@ -3970,6 +3961,16 @@ void MacroAssembler::AssertBoundFunction(Register object) {
   }
 }
 
+void MacroAssembler::AssertGeneratorObject(Register object) {
+  if (emit_debug_code()) {
+    testb(object, Immediate(kSmiTagMask));
+    Check(not_equal, kOperandIsASmiAndNotAGeneratorObject);
+    Push(object);
+    CmpObjectType(object, JS_GENERATOR_OBJECT_TYPE, object);
+    Pop(object);
+    Check(equal, kOperandIsNotAGeneratorObject);
+  }
+}
 
 void MacroAssembler::AssertReceiver(Register object) {
   if (emit_debug_code()) {
@@ -4337,11 +4338,12 @@ void MacroAssembler::FloodFunctionIfStepping(Register fun, Register new_target,
                                              const ParameterCount& expected,
                                              const ParameterCount& actual) {
   Label skip_flooding;
-  ExternalReference step_in_enabled =
-      ExternalReference::debug_step_in_enabled_address(isolate());
-  Operand step_in_enabled_operand = ExternalOperand(step_in_enabled);
-  cmpb(step_in_enabled_operand, Immediate(0));
-  j(equal, &skip_flooding);
+  ExternalReference last_step_action =
+      ExternalReference::debug_last_step_action_address(isolate());
+  Operand last_step_action_operand = ExternalOperand(last_step_action);
+  STATIC_ASSERT(StepFrame > StepIn);
+  cmpb(last_step_action_operand, Immediate(StepIn));
+  j(less, &skip_flooding);
   {
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
@@ -4400,8 +4402,8 @@ void MacroAssembler::Prologue(bool code_pre_aging) {
 
 void MacroAssembler::EmitLoadTypeFeedbackVector(Register vector) {
   movp(vector, Operand(rbp, JavaScriptFrameConstants::kFunctionOffset));
-  movp(vector, FieldOperand(vector, JSFunction::kSharedFunctionInfoOffset));
-  movp(vector, FieldOperand(vector, SharedFunctionInfo::kFeedbackVectorOffset));
+  movp(vector, FieldOperand(vector, JSFunction::kLiteralsOffset));
+  movp(vector, FieldOperand(vector, LiteralsArray::kFeedbackVectorOffset));
 }
 
 
@@ -4482,8 +4484,7 @@ void MacroAssembler::EnterExitFrameEpilogue(int arg_stack_space,
                 arg_stack_space * kRegisterSize;
     subp(rsp, Immediate(space));
     int offset = -ExitFrameConstants::kFixedFrameSizeFromFp;
-    const RegisterConfiguration* config =
-        RegisterConfiguration::ArchDefault(RegisterConfiguration::CRANKSHAFT);
+    const RegisterConfiguration* config = RegisterConfiguration::Crankshaft();
     for (int i = 0; i < config->num_allocatable_double_registers(); ++i) {
       DoubleRegister reg =
           DoubleRegister::from_code(config->GetAllocatableDoubleCode(i));
@@ -4529,8 +4530,7 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles, bool pop_arguments) {
   // r15 : argv
   if (save_doubles) {
     int offset = -ExitFrameConstants::kFixedFrameSizeFromFp;
-    const RegisterConfiguration* config =
-        RegisterConfiguration::ArchDefault(RegisterConfiguration::CRANKSHAFT);
+    const RegisterConfiguration* config = RegisterConfiguration::Crankshaft();
     for (int i = 0; i < config->num_allocatable_double_registers(); ++i) {
       DoubleRegister reg =
           DoubleRegister::from_code(config->GetAllocatableDoubleCode(i));
@@ -4829,7 +4829,7 @@ void MacroAssembler::MakeSureDoubleAlignedHelper(Register result,
     Label aligned;
     testl(result, Immediate(kDoubleAlignmentMask));
     j(zero, &aligned, Label::kNear);
-    if ((flags & PRETENURE) != 0) {
+    if (((flags & ALLOCATION_FOLDED) == 0) && ((flags & PRETENURE) != 0)) {
       ExternalReference allocation_limit =
           AllocationUtils::GetAllocationLimitReference(isolate(), flags);
       cmpp(result, ExternalOperand(allocation_limit));
@@ -4872,6 +4872,7 @@ void MacroAssembler::Allocate(int object_size,
                               AllocationFlags flags) {
   DCHECK((flags & (RESULT_CONTAINS_TOP | SIZE_IN_WORDS)) == 0);
   DCHECK(object_size <= Page::kMaxRegularHeapObjectSize);
+  DCHECK((flags & ALLOCATION_FOLDED) == 0);
   if (!FLAG_inline_new) {
     if (emit_debug_code()) {
       // Trash the registers to simulate an allocation failure.
@@ -4905,23 +4906,19 @@ void MacroAssembler::Allocate(int object_size,
     movp(top_reg, result);
   }
   addp(top_reg, Immediate(object_size));
-  j(carry, gc_required);
   Operand limit_operand = ExternalOperand(allocation_limit);
   cmpp(top_reg, limit_operand);
   j(above, gc_required);
 
-  // Update allocation top.
-  UpdateAllocationTopHelper(top_reg, scratch, flags);
+  if ((flags & ALLOCATION_FOLDING_DOMINATOR) == 0) {
+    // The top pointer is not updated for allocation folding dominators.
+    UpdateAllocationTopHelper(top_reg, scratch, flags);
+  }
 
-  bool tag_result = (flags & TAG_OBJECT) != 0;
   if (top_reg.is(result)) {
-    if (tag_result) {
-      subp(result, Immediate(object_size - kHeapObjectTag));
-    } else {
-      subp(result, Immediate(object_size));
-    }
-  } else if (tag_result) {
-    // Tag the result if requested.
+    subp(result, Immediate(object_size - kHeapObjectTag));
+  } else {
+    // Tag the result.
     DCHECK(kHeapObjectTag == 1);
     incp(result);
   }
@@ -4937,6 +4934,8 @@ void MacroAssembler::Allocate(int header_size,
                               Label* gc_required,
                               AllocationFlags flags) {
   DCHECK((flags & SIZE_IN_WORDS) == 0);
+  DCHECK((flags & ALLOCATION_FOLDING_DOMINATOR) == 0);
+  DCHECK((flags & ALLOCATION_FOLDED) == 0);
   leap(result_end, Operand(element_count, element_size, header_size));
   Allocate(result_end, result, result_end, scratch, gc_required, flags);
 }
@@ -4949,6 +4948,7 @@ void MacroAssembler::Allocate(Register object_size,
                               Label* gc_required,
                               AllocationFlags flags) {
   DCHECK((flags & SIZE_IN_WORDS) == 0);
+  DCHECK((flags & ALLOCATION_FOLDED) == 0);
   if (!FLAG_inline_new) {
     if (emit_debug_code()) {
       // Trash the registers to simulate an allocation failure.
@@ -4971,34 +4971,66 @@ void MacroAssembler::Allocate(Register object_size,
     MakeSureDoubleAlignedHelper(result, scratch, gc_required, flags);
   }
 
-  // Calculate new top and bail out if new space is exhausted.
   ExternalReference allocation_limit =
       AllocationUtils::GetAllocationLimitReference(isolate(), flags);
   if (!object_size.is(result_end)) {
     movp(result_end, object_size);
   }
   addp(result_end, result);
-  j(carry, gc_required);
   Operand limit_operand = ExternalOperand(allocation_limit);
   cmpp(result_end, limit_operand);
   j(above, gc_required);
 
-  // Update allocation top.
-  UpdateAllocationTopHelper(result_end, scratch, flags);
-
-  // Tag the result if requested.
-  if ((flags & TAG_OBJECT) != 0) {
-    addp(result, Immediate(kHeapObjectTag));
+  if ((flags & ALLOCATION_FOLDING_DOMINATOR) == 0) {
+    // The top pointer is not updated for allocation folding dominators.
+    UpdateAllocationTopHelper(result_end, scratch, flags);
   }
+
+  // Tag the result.
+  addp(result, Immediate(kHeapObjectTag));
 }
 
+void MacroAssembler::FastAllocate(int object_size, Register result,
+                                  Register result_end, AllocationFlags flags) {
+  DCHECK(!result.is(result_end));
+  // Load address of new object into result.
+  LoadAllocationTopHelper(result, no_reg, flags);
+
+  if ((flags & DOUBLE_ALIGNMENT) != 0) {
+    MakeSureDoubleAlignedHelper(result, no_reg, NULL, flags);
+  }
+
+  leap(result_end, Operand(result, object_size));
+
+  UpdateAllocationTopHelper(result_end, no_reg, flags);
+
+  addp(result, Immediate(kHeapObjectTag));
+}
+
+void MacroAssembler::FastAllocate(Register object_size, Register result,
+                                  Register result_end, AllocationFlags flags) {
+  DCHECK(!result.is(result_end));
+  // Load address of new object into result.
+  LoadAllocationTopHelper(result, no_reg, flags);
+
+  if ((flags & DOUBLE_ALIGNMENT) != 0) {
+    MakeSureDoubleAlignedHelper(result, no_reg, NULL, flags);
+  }
+
+  leap(result_end, Operand(result, object_size, times_1, 0));
+
+  UpdateAllocationTopHelper(result_end, no_reg, flags);
+
+  addp(result, Immediate(kHeapObjectTag));
+}
 
 void MacroAssembler::AllocateHeapNumber(Register result,
                                         Register scratch,
                                         Label* gc_required,
                                         MutableMode mode) {
   // Allocate heap number in new space.
-  Allocate(HeapNumber::kSize, result, scratch, no_reg, gc_required, TAG_OBJECT);
+  Allocate(HeapNumber::kSize, result, scratch, no_reg, gc_required,
+           NO_ALLOCATION_FLAGS);
 
   Heap::RootListIndex map_index = mode == MUTABLE
       ? Heap::kMutableHeapNumberMapRootIndex
@@ -5030,14 +5062,8 @@ void MacroAssembler::AllocateTwoByteString(Register result,
   }
 
   // Allocate two byte string in new space.
-  Allocate(SeqTwoByteString::kHeaderSize,
-           times_1,
-           scratch1,
-           result,
-           scratch2,
-           scratch3,
-           gc_required,
-           TAG_OBJECT);
+  Allocate(SeqTwoByteString::kHeaderSize, times_1, scratch1, result, scratch2,
+           scratch3, gc_required, NO_ALLOCATION_FLAGS);
 
   // Set the map, length and hash field.
   LoadRoot(kScratchRegister, Heap::kStringMapRootIndex);
@@ -5066,14 +5092,8 @@ void MacroAssembler::AllocateOneByteString(Register result, Register length,
   }
 
   // Allocate one-byte string in new space.
-  Allocate(SeqOneByteString::kHeaderSize,
-           times_1,
-           scratch1,
-           result,
-           scratch2,
-           scratch3,
-           gc_required,
-           TAG_OBJECT);
+  Allocate(SeqOneByteString::kHeaderSize, times_1, scratch1, result, scratch2,
+           scratch3, gc_required, NO_ALLOCATION_FLAGS);
 
   // Set the map, length and hash field.
   LoadRoot(kScratchRegister, Heap::kOneByteStringMapRootIndex);
@@ -5091,7 +5111,7 @@ void MacroAssembler::AllocateTwoByteConsString(Register result,
                                         Label* gc_required) {
   // Allocate heap number in new space.
   Allocate(ConsString::kSize, result, scratch1, scratch2, gc_required,
-           TAG_OBJECT);
+           NO_ALLOCATION_FLAGS);
 
   // Set the map. The other fields are left uninitialized.
   LoadRoot(kScratchRegister, Heap::kConsStringMapRootIndex);
@@ -5103,12 +5123,8 @@ void MacroAssembler::AllocateOneByteConsString(Register result,
                                                Register scratch1,
                                                Register scratch2,
                                                Label* gc_required) {
-  Allocate(ConsString::kSize,
-           result,
-           scratch1,
-           scratch2,
-           gc_required,
-           TAG_OBJECT);
+  Allocate(ConsString::kSize, result, scratch1, scratch2, gc_required,
+           NO_ALLOCATION_FLAGS);
 
   // Set the map. The other fields are left uninitialized.
   LoadRoot(kScratchRegister, Heap::kConsOneByteStringMapRootIndex);
@@ -5122,7 +5138,7 @@ void MacroAssembler::AllocateTwoByteSlicedString(Register result,
                                           Label* gc_required) {
   // Allocate heap number in new space.
   Allocate(SlicedString::kSize, result, scratch1, scratch2, gc_required,
-           TAG_OBJECT);
+           NO_ALLOCATION_FLAGS);
 
   // Set the map. The other fields are left uninitialized.
   LoadRoot(kScratchRegister, Heap::kSlicedStringMapRootIndex);
@@ -5136,7 +5152,7 @@ void MacroAssembler::AllocateOneByteSlicedString(Register result,
                                                  Label* gc_required) {
   // Allocate heap number in new space.
   Allocate(SlicedString::kSize, result, scratch1, scratch2, gc_required,
-           TAG_OBJECT);
+           NO_ALLOCATION_FLAGS);
 
   // Set the map. The other fields are left uninitialized.
   LoadRoot(kScratchRegister, Heap::kSlicedOneByteStringMapRootIndex);
@@ -5152,7 +5168,8 @@ void MacroAssembler::AllocateJSValue(Register result, Register constructor,
   DCHECK(!result.is(value));
 
   // Allocate JSValue in new space.
-  Allocate(JSValue::kSize, result, scratch, no_reg, gc_required, TAG_OBJECT);
+  Allocate(JSValue::kSize, result, scratch, no_reg, gc_required,
+           NO_ALLOCATION_FLAGS);
 
   // Initialize the JSValue.
   LoadGlobalFunctionInitialMap(constructor, scratch);

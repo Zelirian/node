@@ -37,18 +37,26 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   int feedback_slot = 97;
 
   builder.LoadLiteral(heap_num_0)
+      .StoreAccumulatorInRegister(reg_0)
       .LoadLiteral(heap_num_1)
+      .StoreAccumulatorInRegister(reg_0)
       .LoadLiteral(zero)
+      .StoreAccumulatorInRegister(reg_0)
       .LoadLiteral(smi_0)
+      .StoreAccumulatorInRegister(reg_0)
       .LoadLiteral(smi_1)
+      .StoreAccumulatorInRegister(reg_1)
       .LoadAccumulatorWithRegister(reg_0)
+      .BinaryOperation(Token::Value::ADD, reg_0)
+      .StoreAccumulatorInRegister(reg_1)
       .LoadNamedProperty(reg_1, name, feedback_slot)
+      .BinaryOperation(Token::Value::ADD, reg_0)
       .StoreAccumulatorInRegister(param)
       .CallRuntimeForPair(Runtime::kLoadLookupSlotForCall, param, 1, reg_0)
       .ForInPrepare(reg_0)
       .CallRuntime(Runtime::kLoadIC_Miss, reg_0, 1)
       .Debugger()
-      .LoadGlobal(name, 0x10000000, TypeofMode::NOT_INSIDE_TYPEOF)
+      .LoadGlobal(0x10000000, TypeofMode::NOT_INSIDE_TYPEOF)
       .Return();
 
   // Test iterator sees the expected output from the builder.
@@ -64,12 +72,30 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   offset += Bytecodes::Size(Bytecode::kLdaConstant, OperandScale::kSingle);
   iterator.Advance();
 
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
+  iterator.Advance();
+
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaConstant);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
   CHECK(iterator.GetConstantForIndexOperand(0).is_identical_to(heap_num_1));
   CHECK(!iterator.done());
   offset += Bytecodes::Size(Bytecode::kLdaConstant, OperandScale::kSingle);
+  iterator.Advance();
+
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaZero);
@@ -79,12 +105,30 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   offset += Bytecodes::Size(Bytecode::kLdaZero, OperandScale::kSingle);
   iterator.Advance();
 
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
+  iterator.Advance();
+
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaSmi);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
   CHECK_EQ(Smi::FromInt(iterator.GetImmediateOperand(0)), smi_0);
   CHECK(!iterator.done());
   offset += Bytecodes::Size(Bytecode::kLdaSmi, OperandScale::kSingle);
+  iterator.Advance();
+
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaSmi);
@@ -96,6 +140,15 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
             kPrefixByteSize;
   iterator.Advance();
 
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_1.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
+  iterator.Advance();
+
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdar);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
@@ -104,14 +157,41 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   offset += Bytecodes::Size(Bytecode::kLdar, OperandScale::kSingle);
   iterator.Advance();
 
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kLoadIC);
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kAdd);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
+  iterator.Advance();
+
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_1.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
+  iterator.Advance();
+
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaNamedProperty);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
   CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_1.index());
   CHECK_EQ(iterator.GetIndexOperand(1), name_index);
   CHECK_EQ(iterator.GetIndexOperand(2), feedback_slot);
   CHECK(!iterator.done());
-  offset += Bytecodes::Size(Bytecode::kLoadIC, OperandScale::kSingle);
+  offset += Bytecodes::Size(Bytecode::kLdaNamedProperty, OperandScale::kSingle);
+  iterator.Advance();
+
+  CHECK_EQ(iterator.current_bytecode(), Bytecode::kAdd);
+  CHECK_EQ(iterator.current_offset(), offset);
+  CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
+  CHECK_EQ(iterator.GetRegisterOperand(0).index(), reg_0.index());
+  CHECK_EQ(iterator.GetRegisterOperandRange(0), 1);
+  CHECK(!iterator.done());
+  offset += Bytecodes::Size(Bytecode::kStar, OperandScale::kSingle);
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kStar);
@@ -149,8 +229,7 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kCallRuntime);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
-  CHECK_EQ(static_cast<Runtime::FunctionId>(iterator.GetRuntimeIdOperand(0)),
-           Runtime::kLoadIC_Miss);
+  CHECK_EQ(iterator.GetRuntimeIdOperand(0), Runtime::kLoadIC_Miss);
   CHECK_EQ(iterator.GetRegisterOperand(1).index(), reg_0.index());
   CHECK_EQ(iterator.GetRegisterCountOperand(2), 1);
   CHECK(!iterator.done());
@@ -167,8 +246,8 @@ TEST_F(BytecodeArrayIteratorTest, IteratesBytecodeArray) {
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kLdaGlobal);
   CHECK_EQ(iterator.current_offset(), offset);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kQuadruple);
-  CHECK_EQ(iterator.current_bytecode_size(), 10);
-  CHECK_EQ(iterator.GetIndexOperand(1), 0x10000000);
+  CHECK_EQ(iterator.current_bytecode_size(), 6);
+  CHECK_EQ(iterator.GetIndexOperand(0), 0x10000000);
   offset += Bytecodes::Size(Bytecode::kLdaGlobal, OperandScale::kQuadruple) +
             kPrefixByteSize;
   iterator.Advance();

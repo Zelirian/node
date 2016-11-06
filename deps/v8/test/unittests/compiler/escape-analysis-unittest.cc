@@ -48,7 +48,8 @@ class EscapeAnalysisTest : public GraphTest {
       effect = effect_;
     }
 
-    return effect_ = graph()->NewNode(common()->BeginRegion(), effect);
+    return effect_ = graph()->NewNode(
+               common()->BeginRegion(RegionObservability::kObservable), effect);
   }
 
   Node* FinishRegion(Node* value, Node* effect = nullptr) {
@@ -146,14 +147,18 @@ class EscapeAnalysisTest : public GraphTest {
   }
 
   FieldAccess FieldAccessAtIndex(int offset) {
-    FieldAccess access = {kTaggedBase, offset, MaybeHandle<Name>(), Type::Any(),
-                          MachineType::AnyTagged()};
+    FieldAccess access = {kTaggedBase,
+                          offset,
+                          MaybeHandle<Name>(),
+                          Type::Any(),
+                          MachineType::AnyTagged(),
+                          kFullWriteBarrier};
     return access;
   }
 
   ElementAccess MakeElementAccess(int header_size) {
     ElementAccess access = {kTaggedBase, header_size, Type::Any(),
-                            MachineType::AnyTagged()};
+                            MachineType::AnyTagged(), kFullWriteBarrier};
     return access;
   }
 

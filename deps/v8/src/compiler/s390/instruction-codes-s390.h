@@ -107,6 +107,7 @@ namespace compiler {
   V(S390_Float32ToInt32)           \
   V(S390_Float32ToUint32)          \
   V(S390_Float32ToDouble)          \
+  V(S390_Float64SilenceNaN)        \
   V(S390_DoubleToInt32)            \
   V(S390_DoubleToUint32)           \
   V(S390_DoubleToInt64)            \
@@ -126,6 +127,7 @@ namespace compiler {
   V(S390_LoadWordS16)              \
   V(S390_LoadWordU16)              \
   V(S390_LoadWordS32)              \
+  V(S390_LoadWordU32)              \
   V(S390_LoadWord64)               \
   V(S390_LoadFloat32)              \
   V(S390_LoadDouble)               \

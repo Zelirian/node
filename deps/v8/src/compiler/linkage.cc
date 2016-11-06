@@ -88,7 +88,7 @@ bool CallDescriptor::HasSameReturnLocationsAs(
 
 bool CallDescriptor::CanTailCall(const Node* node,
                                  int* stack_param_delta) const {
-  CallDescriptor const* other = OpParameter<CallDescriptor const*>(node);
+  CallDescriptor const* other = CallDescriptorOf(node->op());
   size_t current_input = 0;
   size_t other_input = 0;
   *stack_param_delta = 0;
@@ -112,19 +112,12 @@ bool CallDescriptor::CanTailCall(const Node* node,
     ++current_input;
     ++other_input;
   }
-  return HasSameReturnLocationsAs(OpParameter<CallDescriptor const*>(node));
+  return HasSameReturnLocationsAs(CallDescriptorOf(node->op()));
 }
 
 
 CallDescriptor* Linkage::ComputeIncoming(Zone* zone, CompilationInfo* info) {
   DCHECK(!info->IsStub());
-  if (info->has_literal()) {
-    // If we already have the function literal, use the number of parameters
-    // plus the receiver.
-    return GetJSCallDescriptor(zone, info->is_osr(),
-                               1 + info->literal()->parameter_count(),
-                               CallDescriptor::kNoFlags);
-  }
   if (!info->closure().is_null()) {
     // If we are compiling a JS function, use a JS call descriptor,
     // plus the receiver.
@@ -138,19 +131,19 @@ CallDescriptor* Linkage::ComputeIncoming(Zone* zone, CompilationInfo* info) {
 
 
 // static
-int Linkage::FrameStateInputCount(Runtime::FunctionId function) {
+bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
   // Most runtime functions need a FrameState. A few chosen ones that we know
   // not to call into arbitrary JavaScript, not to throw, and not to deoptimize
   // are blacklisted here and can be called without a FrameState.
   switch (function) {
+    case Runtime::kAbort:
     case Runtime::kAllocateInTargetSpace:
     case Runtime::kCreateIterResultObject:
-    case Runtime::kDefineDataPropertyInLiteral:
     case Runtime::kDefineGetterPropertyUnchecked:  // TODO(jarin): Is it safe?
     case Runtime::kDefineSetterPropertyUnchecked:  // TODO(jarin): Is it safe?
-    case Runtime::kFinalizeClassDefinition:        // TODO(conradw): Is it safe?
     case Runtime::kForInDone:
     case Runtime::kForInStep:
+    case Runtime::kGeneratorGetContinuation:
     case Runtime::kGetSuperConstructor:
     case Runtime::kIsFunction:
     case Runtime::kNewClosure:
@@ -166,14 +159,18 @@ int Linkage::FrameStateInputCount(Runtime::FunctionId function) {
     case Runtime::kStringLessThanOrEqual:
     case Runtime::kStringGreaterThan:
     case Runtime::kStringGreaterThanOrEqual:
+    case Runtime::kToFastProperties:  // TODO(conradw): Is it safe?
     case Runtime::kTraceEnter:
     case Runtime::kTraceExit:
-      return 0;
+      return false;
+    case Runtime::kInlineCall:
+    case Runtime::kInlineDeoptimizeNow:
     case Runtime::kInlineGetPrototype:
     case Runtime::kInlineNewObject:
     case Runtime::kInlineRegExpConstructResult:
     case Runtime::kInlineRegExpExec:
     case Runtime::kInlineSubString:
+    case Runtime::kInlineThrowNotDateError:
     case Runtime::kInlineToInteger:
     case Runtime::kInlineToLength:
     case Runtime::kInlineToName:
@@ -183,11 +180,7 @@ int Linkage::FrameStateInputCount(Runtime::FunctionId function) {
     case Runtime::kInlineToPrimitive_Number:
     case Runtime::kInlineToPrimitive_String:
     case Runtime::kInlineToString:
-      return 1;
-    case Runtime::kInlineCall:
-    case Runtime::kInlineDeoptimizeNow:
-    case Runtime::kInlineThrowNotDateError:
-      return 2;
+      return true;
     default:
       break;
   }
@@ -195,9 +188,9 @@ int Linkage::FrameStateInputCount(Runtime::FunctionId function) {
   // Most inlined runtime functions (except the ones listed above) can be called
   // without a FrameState or will be lowered by JSIntrinsicLowering internally.
   const Runtime::Function* const f = Runtime::FunctionForId(function);
-  if (f->intrinsic_type == Runtime::IntrinsicType::INLINE) return 0;
+  if (f->intrinsic_type == Runtime::IntrinsicType::INLINE) return false;
 
-  return 1;
+  return true;
 }
 
 
@@ -260,7 +253,7 @@ CallDescriptor* Linkage::GetRuntimeCallDescriptor(
   locations.AddParam(regloc(kContextRegister));
   types.AddParam(MachineType::AnyTagged());
 
-  if (Linkage::FrameStateInputCount(function_id) == 0) {
+  if (!Linkage::NeedsFrameStateInput(function_id)) {
     flags = static_cast<CallDescriptor::Flags>(
         flags & ~CallDescriptor::kNeedsFrameState);
   }
@@ -411,6 +404,78 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
       descriptor.DebugName(isolate));
 }
 
+// static
+CallDescriptor* Linkage::GetAllocateCallDescriptor(Zone* zone) {
+  LocationSignature::Builder locations(zone, 1, 1);
+  MachineSignature::Builder types(zone, 1, 1);
+
+  locations.AddParam(regloc(kAllocateSizeRegister));
+  types.AddParam(MachineType::Int32());
+
+  locations.AddReturn(regloc(kReturnRegister0));
+  types.AddReturn(MachineType::AnyTagged());
+
+  // The target for allocate calls is a code object.
+  MachineType target_type = MachineType::AnyTagged();
+  LinkageLocation target_loc = LinkageLocation::ForAnyRegister();
+  return new (zone) CallDescriptor(     // --
+      CallDescriptor::kCallCodeObject,  // kind
+      target_type,                      // target MachineType
+      target_loc,                       // target location
+      types.Build(),                    // machine_sig
+      locations.Build(),                // location_sig
+      0,                                // stack_parameter_count
+      Operator::kNoThrow,               // properties
+      kNoCalleeSaved,                   // callee-saved registers
+      kNoCalleeSaved,                   // callee-saved fp
+      CallDescriptor::kCanUseRoots,     // flags
+      "Allocate");
+}
+
+// static
+CallDescriptor* Linkage::GetBytecodeDispatchCallDescriptor(
+    Isolate* isolate, Zone* zone, const CallInterfaceDescriptor& descriptor,
+    int stack_parameter_count) {
+  const int register_parameter_count = descriptor.GetRegisterParameterCount();
+  const int parameter_count = register_parameter_count + stack_parameter_count;
+
+  LocationSignature::Builder locations(zone, 0, parameter_count);
+  MachineSignature::Builder types(zone, 0, parameter_count);
+
+  // Add parameters in registers and on the stack.
+  for (int i = 0; i < parameter_count; i++) {
+    if (i < register_parameter_count) {
+      // The first parameters go in registers.
+      Register reg = descriptor.GetRegisterParameter(i);
+      Representation rep =
+          RepresentationFromType(descriptor.GetParameterType(i));
+      locations.AddParam(regloc(reg));
+      types.AddParam(reptyp(rep));
+    } else {
+      // The rest of the parameters go on the stack.
+      int stack_slot = i - register_parameter_count - stack_parameter_count;
+      locations.AddParam(LinkageLocation::ForCallerFrameSlot(stack_slot));
+      types.AddParam(MachineType::AnyTagged());
+    }
+  }
+
+  // The target for interpreter dispatches is a code entry address.
+  MachineType target_type = MachineType::Pointer();
+  LinkageLocation target_loc = LinkageLocation::ForAnyRegister();
+  return new (zone) CallDescriptor(            // --
+      CallDescriptor::kCallAddress,            // kind
+      target_type,                             // target MachineType
+      target_loc,                              // target location
+      types.Build(),                           // machine_sig
+      locations.Build(),                       // location_sig
+      stack_parameter_count,                   // stack_parameter_count
+      Operator::kNoProperties,                 // properties
+      kNoCalleeSaved,                          // callee-saved registers
+      kNoCalleeSaved,                          // callee-saved fp
+      CallDescriptor::kCanUseRoots |           // flags
+          CallDescriptor::kSupportsTailCalls,  // flags
+      descriptor.DebugName(isolate));
+}
 
 LinkageLocation Linkage::GetOsrValueLocation(int index) const {
   CHECK(incoming_->IsJSFunctionCall());

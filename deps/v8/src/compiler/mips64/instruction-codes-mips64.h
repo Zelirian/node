@@ -36,6 +36,8 @@ namespace compiler {
   V(Mips64Nor)                      \
   V(Mips64Xor)                      \
   V(Mips64Clz)                      \
+  V(Mips64Lsa)                      \
+  V(Mips64Dlsa)                     \
   V(Mips64Shl)                      \
   V(Mips64Shr)                      \
   V(Mips64Sar)                      \
@@ -59,6 +61,7 @@ namespace compiler {
   V(Mips64CmpS)                     \
   V(Mips64AddS)                     \
   V(Mips64SubS)                     \
+  V(Mips64SubPreserveNanS)          \
   V(Mips64MulS)                     \
   V(Mips64DivS)                     \
   V(Mips64ModS)                     \
@@ -69,6 +72,7 @@ namespace compiler {
   V(Mips64CmpD)                     \
   V(Mips64AddD)                     \
   V(Mips64SubD)                     \
+  V(Mips64SubPreserveNanD)          \
   V(Mips64MulD)                     \
   V(Mips64DivD)                     \
   V(Mips64ModD)                     \
@@ -114,9 +118,10 @@ namespace compiler {
   V(Mips64Lh)                       \
   V(Mips64Lhu)                      \
   V(Mips64Sh)                       \
-  V(Mips64Ld)                       \
   V(Mips64Lw)                       \
+  V(Mips64Lwu)                      \
   V(Mips64Sw)                       \
+  V(Mips64Ld)                       \
   V(Mips64Sd)                       \
   V(Mips64Lwc1)                     \
   V(Mips64Swc1)                     \
@@ -130,6 +135,7 @@ namespace compiler {
   V(Mips64Float64InsertHighWord32)  \
   V(Mips64Float64Max)               \
   V(Mips64Float64Min)               \
+  V(Mips64Float64SilenceNaN)        \
   V(Mips64Float32Max)               \
   V(Mips64Float32Min)               \
   V(Mips64Push)                     \

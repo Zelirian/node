@@ -95,11 +95,12 @@ MaybeHandle<Object> DebugEvaluate::Evaluate(
   }
 
   Handle<JSFunction> eval_fun;
-  ASSIGN_RETURN_ON_EXCEPTION(isolate, eval_fun,
-                             Compiler::GetFunctionFromEval(
-                                 source, outer_info, context, SLOPPY,
-                                 NO_PARSE_RESTRICTION, RelocInfo::kNoPosition),
-                             Object);
+  ASSIGN_RETURN_ON_EXCEPTION(
+      isolate, eval_fun,
+      Compiler::GetFunctionFromEval(
+          source, outer_info, context, SLOPPY, NO_PARSE_RESTRICTION,
+          RelocInfo::kNoPosition, RelocInfo::kNoPosition),
+      Object);
 
   Handle<Object> result;
   ASSIGN_RETURN_ON_EXCEPTION(
@@ -182,7 +183,8 @@ DebugEvaluate::ContextBuilder::ContextBuilder(Isolate* isolate,
         context_chain_element.wrapped_context = current_context;
       }
       context_chain_.Add(context_chain_element);
-    } else if (scope_type == ScopeIterator::ScopeTypeBlock) {
+    } else if (scope_type == ScopeIterator::ScopeTypeBlock ||
+               scope_type == ScopeIterator::ScopeTypeEval) {
       Handle<JSObject> materialized = factory->NewJSObjectWithNullProto();
       frame_inspector.MaterializeStackLocals(materialized,
                                              it.CurrentScopeInfo());
@@ -248,7 +250,7 @@ void DebugEvaluate::ContextBuilder::MaterializeReceiver(
     // referenced by the current function, so it can be correctly resolved.
     return;
   } else if (local_function->shared()->scope_info()->HasReceiver() &&
-             !frame_->receiver()->IsTheHole()) {
+             !frame_->receiver()->IsTheHole(isolate_)) {
     recv = handle(frame_->receiver(), isolate_);
   }
   JSObject::SetOwnPropertyIgnoreAttributes(target, name, recv, NONE).Check();

@@ -182,11 +182,7 @@ void InstructionSelector::VisitLoad(Node* node) {
     case MachineRepresentation::kTagged:  // Fall through.
 #endif
     case MachineRepresentation::kWord32:
-      opcode = kS390_LoadWordS32;
-#if V8_TARGET_ARCH_S390X
-      // TODO(john.yan): Remove this mode since s390 do not has this restriction
-      mode = kInt16Imm_4ByteAligned;
-#endif
+      opcode = kS390_LoadWordU32;
       break;
 #if V8_TARGET_ARCH_S390X
     case MachineRepresentation::kTagged:  // Fall through.
@@ -1042,14 +1038,12 @@ void InstructionSelector::VisitTruncateFloat64ToFloat32(Node* node) {
   VisitRR(this, kS390_DoubleToFloat32, node);
 }
 
-void InstructionSelector::VisitTruncateFloat64ToInt32(Node* node) {
-  switch (TruncationModeOf(node->op())) {
-    case TruncationMode::kJavaScript:
-      return VisitRR(this, kArchTruncateDoubleToI, node);
-    case TruncationMode::kRoundToZero:
-      return VisitRR(this, kS390_DoubleToInt32, node);
-  }
-  UNREACHABLE();
+void InstructionSelector::VisitTruncateFloat64ToWord32(Node* node) {
+  VisitRR(this, kArchTruncateDoubleToI, node);
+}
+
+void InstructionSelector::VisitRoundFloat64ToInt32(Node* node) {
+  VisitRR(this, kS390_DoubleToInt32, node);
 }
 
 void InstructionSelector::VisitTruncateFloat32ToInt32(Node* node) {
@@ -1123,6 +1117,11 @@ void InstructionSelector::VisitFloat32Sub(Node* node) {
   VisitRRR(this, kS390_SubFloat, node);
 }
 
+void InstructionSelector::VisitFloat32SubPreserveNan(Node* node) {
+  S390OperandGenerator g(this);
+  VisitRRR(this, kS390_SubFloat, node);
+}
+
 void InstructionSelector::VisitFloat64Sub(Node* node) {
   // TODO(mbrandy): detect multiply-subtract
   S390OperandGenerator g(this);
@@ -1145,6 +1144,10 @@ void InstructionSelector::VisitFloat64Sub(Node* node) {
          g.UseRegister(m.right().node()));
     return;
   }
+  VisitRRR(this, kS390_SubDouble, node);
+}
+
+void InstructionSelector::VisitFloat64SubPreserveNan(Node* node) {
   VisitRRR(this, kS390_SubDouble, node);
 }
 
@@ -1176,6 +1179,10 @@ void InstructionSelector::VisitFloat32Max(Node* node) { UNREACHABLE(); }
 
 void InstructionSelector::VisitFloat64Max(Node* node) { UNREACHABLE(); }
 
+void InstructionSelector::VisitFloat64SilenceNaN(Node* node) {
+  VisitRR(this, kS390_Float64SilenceNaN, node);
+}
+
 void InstructionSelector::VisitFloat32Min(Node* node) { UNREACHABLE(); }
 
 void InstructionSelector::VisitFloat64Min(Node* node) { UNREACHABLE(); }
@@ -1190,6 +1197,21 @@ void InstructionSelector::VisitFloat64Abs(Node* node) {
 
 void InstructionSelector::VisitFloat32Sqrt(Node* node) {
   VisitRR(this, kS390_SqrtFloat, node);
+}
+
+void InstructionSelector::VisitFloat64Ieee754Unop(Node* node,
+                                                  InstructionCode opcode) {
+  S390OperandGenerator g(this);
+  Emit(opcode, g.DefineAsFixed(node, d0), g.UseFixed(node->InputAt(0), d0))
+      ->MarkAsCall();
+}
+
+void InstructionSelector::VisitFloat64Ieee754Binop(Node* node,
+                                                   InstructionCode opcode) {
+  S390OperandGenerator g(this);
+  Emit(opcode, g.DefineAsFixed(node, d0), g.UseFixed(node->InputAt(0), d0),
+       g.UseFixed(node->InputAt(1), d2))
+      ->MarkAsCall();
 }
 
 void InstructionSelector::VisitFloat64Sqrt(Node* node) {
@@ -1231,6 +1253,10 @@ void InstructionSelector::VisitFloat32RoundTiesEven(Node* node) {
 void InstructionSelector::VisitFloat64RoundTiesEven(Node* node) {
   UNREACHABLE();
 }
+
+void InstructionSelector::VisitFloat32Neg(Node* node) { UNREACHABLE(); }
+
+void InstructionSelector::VisitFloat64Neg(Node* node) { UNREACHABLE(); }
 
 void InstructionSelector::VisitInt32AddWithOverflow(Node* node) {
   if (Node* ovf = NodeProperties::FindProjection(node, 1)) {
@@ -1750,6 +1776,61 @@ void InstructionSelector::VisitFloat64InsertHighWord32(Node* node) {
        g.UseRegister(left), g.UseRegister(right));
 }
 
+void InstructionSelector::VisitAtomicLoad(Node* node) {
+  LoadRepresentation load_rep = LoadRepresentationOf(node->op());
+  S390OperandGenerator g(this);
+  Node* base = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  ArchOpcode opcode = kArchNop;
+  switch (load_rep.representation()) {
+    case MachineRepresentation::kWord8:
+      opcode = load_rep.IsSigned() ? kAtomicLoadInt8 : kAtomicLoadUint8;
+      break;
+    case MachineRepresentation::kWord16:
+      opcode = load_rep.IsSigned() ? kAtomicLoadInt16 : kAtomicLoadUint16;
+      break;
+    case MachineRepresentation::kWord32:
+      opcode = kAtomicLoadWord32;
+      break;
+    default:
+      UNREACHABLE();
+      return;
+  }
+  Emit(opcode | AddressingModeField::encode(kMode_MRR),
+       g.DefineAsRegister(node), g.UseRegister(base), g.UseRegister(index));
+}
+
+void InstructionSelector::VisitAtomicStore(Node* node) {
+  MachineRepresentation rep = AtomicStoreRepresentationOf(node->op());
+  S390OperandGenerator g(this);
+  Node* base = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* value = node->InputAt(2);
+  ArchOpcode opcode = kArchNop;
+  switch (rep) {
+    case MachineRepresentation::kWord8:
+      opcode = kAtomicStoreWord8;
+      break;
+    case MachineRepresentation::kWord16:
+      opcode = kAtomicStoreWord16;
+      break;
+    case MachineRepresentation::kWord32:
+      opcode = kAtomicStoreWord32;
+      break;
+    default:
+      UNREACHABLE();
+      return;
+  }
+
+  InstructionOperand inputs[4];
+  size_t input_count = 0;
+  inputs[input_count++] = g.UseUniqueRegister(value);
+  inputs[input_count++] = g.UseUniqueRegister(base);
+  inputs[input_count++] = g.UseUniqueRegister(index);
+  Emit(opcode | AddressingModeField::encode(kMode_MRR), 0, nullptr, input_count,
+       inputs);
+}
+
 // static
 MachineOperatorBuilder::Flags
 InstructionSelector::SupportedMachineOperatorFlags() {
@@ -1762,6 +1843,13 @@ InstructionSelector::SupportedMachineOperatorFlags() {
          MachineOperatorBuilder::kFloat64RoundTiesAway |
          MachineOperatorBuilder::kWord32Popcnt |
          MachineOperatorBuilder::kWord64Popcnt;
+}
+
+// static
+MachineOperatorBuilder::AlignmentRequirements
+InstructionSelector::AlignmentRequirements() {
+  return MachineOperatorBuilder::AlignmentRequirements::
+      FullUnalignedAccessSupport();
 }
 
 }  // namespace compiler

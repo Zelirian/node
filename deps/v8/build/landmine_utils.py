@@ -1,4 +1,4 @@
-# Copyright 2014 the V8 project authors. All rights reserved.
+# Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -33,7 +33,7 @@ def IsWindows():
 
 @memoize()
 def IsLinux():
-  return sys.platform.startswith(('linux', 'freebsd'))
+  return sys.platform.startswith(('linux', 'freebsd', 'netbsd', 'openbsd'))
 
 
 @memoize()
@@ -64,13 +64,10 @@ def gyp_msvs_version():
 def distributor():
   """
   Returns a string which is the distributed build engine in use (if any).
-  Possible values: 'goma', 'ib', ''
+  Possible values: 'goma', None
   """
   if 'goma' in gyp_defines():
     return 'goma'
-  elif IsWindows():
-    if 'CHROME_HEADLESS' in os.environ:
-      return 'ib' # use (win and !goma and headless) as approximation of ib
 
 
 @memoize()
@@ -90,34 +87,3 @@ def platform():
     return 'linux'
   else:
     return 'mac'
-
-
-@memoize()
-def builder():
-  """
-  Returns a string representing the build engine (not compiler) to use.
-  Possible values: 'make', 'ninja', 'xcode', 'msvs', 'scons'
-  """
-  if 'GYP_GENERATORS' in os.environ:
-    # for simplicity, only support the first explicit generator
-    generator = os.environ['GYP_GENERATORS'].split(',')[0]
-    if generator.endswith('-android'):
-      return generator.split('-')[0]
-    elif generator.endswith('-ninja'):
-      return 'ninja'
-    else:
-      return generator
-  else:
-    if platform() == 'android':
-      # Good enough for now? Do any android bots use make?
-      return 'make'
-    elif platform() == 'ios':
-      return 'xcode'
-    elif IsWindows():
-      return 'msvs'
-    elif IsLinux():
-      return 'make'
-    elif IsMac():
-      return 'xcode'
-    else:
-      assert False, 'Don\'t know what builder we\'re using!'

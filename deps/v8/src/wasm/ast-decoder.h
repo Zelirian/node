@@ -25,7 +25,7 @@ namespace wasm {
 struct LocalIndexOperand {
   uint32_t index;
   LocalType type;
-  int length;
+  unsigned length;
 
   inline LocalIndexOperand(Decoder* decoder, const byte* pc) {
     index = decoder->checked_read_u32v(pc, 1, &length, "local index");
@@ -35,7 +35,7 @@ struct LocalIndexOperand {
 
 struct ImmI8Operand {
   int8_t value;
-  int length;
+  unsigned length;
   inline ImmI8Operand(Decoder* decoder, const byte* pc) {
     value = bit_cast<int8_t>(decoder->checked_read_u8(pc, 1, "immi8"));
     length = 1;
@@ -44,7 +44,7 @@ struct ImmI8Operand {
 
 struct ImmI32Operand {
   int32_t value;
-  int length;
+  unsigned length;
   inline ImmI32Operand(Decoder* decoder, const byte* pc) {
     value = decoder->checked_read_i32v(pc, 1, &length, "immi32");
   }
@@ -52,7 +52,7 @@ struct ImmI32Operand {
 
 struct ImmI64Operand {
   int64_t value;
-  int length;
+  unsigned length;
   inline ImmI64Operand(Decoder* decoder, const byte* pc) {
     value = decoder->checked_read_i64v(pc, 1, &length, "immi64");
   }
@@ -60,7 +60,7 @@ struct ImmI64Operand {
 
 struct ImmF32Operand {
   float value;
-  int length;
+  unsigned length;
   inline ImmF32Operand(Decoder* decoder, const byte* pc) {
     value = bit_cast<float>(decoder->checked_read_u32(pc, 1, "immf32"));
     length = 4;
@@ -69,7 +69,7 @@ struct ImmF32Operand {
 
 struct ImmF64Operand {
   double value;
-  int length;
+  unsigned length;
   inline ImmF64Operand(Decoder* decoder, const byte* pc) {
     value = bit_cast<double>(decoder->checked_read_u64(pc, 1, "immf64"));
     length = 8;
@@ -80,7 +80,7 @@ struct GlobalIndexOperand {
   uint32_t index;
   LocalType type;
   MachineType machine_type;
-  int length;
+  unsigned length;
 
   inline GlobalIndexOperand(Decoder* decoder, const byte* pc) {
     index = decoder->checked_read_u32v(pc, 1, &length, "global index");
@@ -89,66 +89,85 @@ struct GlobalIndexOperand {
   }
 };
 
-struct Block;
+struct Control;
 struct BreakDepthOperand {
+  uint32_t arity;
   uint32_t depth;
-  Block* target;
-  int length;
+  Control* target;
+  unsigned length;
   inline BreakDepthOperand(Decoder* decoder, const byte* pc) {
-    depth = decoder->checked_read_u32v(pc, 1, &length, "break depth");
+    unsigned len1 = 0;
+    unsigned len2 = 0;
+    arity = decoder->checked_read_u32v(pc, 1, &len1, "argument count");
+    depth = decoder->checked_read_u32v(pc, 1 + len1, &len2, "break depth");
+    length = len1 + len2;
     target = nullptr;
   }
 };
 
-struct BlockCountOperand {
-  uint32_t count;
-  int length;
-  inline BlockCountOperand(Decoder* decoder, const byte* pc) {
-    count = decoder->checked_read_u32v(pc, 1, &length, "block count");
-  }
-};
-
-struct SignatureIndexOperand {
+struct CallIndirectOperand {
+  uint32_t arity;
   uint32_t index;
   FunctionSig* sig;
-  int length;
-  inline SignatureIndexOperand(Decoder* decoder, const byte* pc) {
-    index = decoder->checked_read_u32v(pc, 1, &length, "signature index");
+  unsigned length;
+  inline CallIndirectOperand(Decoder* decoder, const byte* pc) {
+    unsigned len1 = 0;
+    unsigned len2 = 0;
+    arity = decoder->checked_read_u32v(pc, 1, &len1, "argument count");
+    index = decoder->checked_read_u32v(pc, 1 + len1, &len2, "signature index");
+    length = len1 + len2;
     sig = nullptr;
   }
 };
 
-struct FunctionIndexOperand {
+struct CallFunctionOperand {
+  uint32_t arity;
   uint32_t index;
   FunctionSig* sig;
-  int length;
-  inline FunctionIndexOperand(Decoder* decoder, const byte* pc) {
-    index = decoder->checked_read_u32v(pc, 1, &length, "function index");
+  unsigned length;
+  inline CallFunctionOperand(Decoder* decoder, const byte* pc) {
+    unsigned len1 = 0;
+    unsigned len2 = 0;
+    arity = decoder->checked_read_u32v(pc, 1, &len1, "argument count");
+    index = decoder->checked_read_u32v(pc, 1 + len1, &len2, "function index");
+    length = len1 + len2;
     sig = nullptr;
   }
 };
 
-struct ImportIndexOperand {
+struct CallImportOperand {
+  uint32_t arity;
   uint32_t index;
   FunctionSig* sig;
-  int length;
-  inline ImportIndexOperand(Decoder* decoder, const byte* pc) {
-    index = decoder->checked_read_u32v(pc, 1, &length, "import index");
+  unsigned length;
+  inline CallImportOperand(Decoder* decoder, const byte* pc) {
+    unsigned len1 = 0;
+    unsigned len2 = 0;
+    arity = decoder->checked_read_u32v(pc, 1, &len1, "argument count");
+    index = decoder->checked_read_u32v(pc, 1 + len1, &len2, "import index");
+    length = len1 + len2;
     sig = nullptr;
   }
 };
 
 struct BranchTableOperand {
+  uint32_t arity;
   uint32_t table_count;
   const byte* table;
-  int length;
+  unsigned length;
   inline BranchTableOperand(Decoder* decoder, const byte* pc) {
-    int varint_length;
+    unsigned len1 = 0;
+    unsigned len2 = 0;
+    arity = decoder->checked_read_u32v(pc, 1, &len1, "argument count");
     table_count =
-        decoder->checked_read_u32v(pc, 1, &varint_length, "expected #entries");
-    length = varint_length + (table_count + 1) * sizeof(uint32_t);
+        decoder->checked_read_u32v(pc, 1 + len1, &len2, "table count");
+    if (table_count > (UINT_MAX / sizeof(uint32_t)) - 1 ||
+        len1 + len2 > UINT_MAX - (table_count + 1) * sizeof(uint32_t)) {
+      decoder->error(pc, "branch table size overflow");
+    }
+    length = len1 + len2 + (table_count + 1) * sizeof(uint32_t);
 
-    uint32_t table_start = 1 + varint_length;
+    uint32_t table_start = 1 + len1 + len2;
     if (decoder->check(pc, table_start, (table_count + 1) * sizeof(uint32_t),
                        "expected <table entries>")) {
       table = pc + table_start;
@@ -156,8 +175,8 @@ struct BranchTableOperand {
       table = nullptr;
     }
   }
-  inline uint32_t read_entry(Decoder* decoder, int i) {
-    DCHECK(i >= 0 && static_cast<uint32_t>(i) <= table_count);
+  inline uint32_t read_entry(Decoder* decoder, unsigned i) {
+    DCHECK(i <= table_count);
     return table ? decoder->read_u32(table + i * sizeof(uint32_t)) : 0;
   }
 };
@@ -165,15 +184,24 @@ struct BranchTableOperand {
 struct MemoryAccessOperand {
   uint32_t alignment;
   uint32_t offset;
-  int length;
+  unsigned length;
   inline MemoryAccessOperand(Decoder* decoder, const byte* pc) {
-    int alignment_length;
+    unsigned alignment_length;
     alignment =
         decoder->checked_read_u32v(pc, 1, &alignment_length, "alignment");
-    int offset_length;
+    unsigned offset_length;
     offset = decoder->checked_read_u32v(pc, 1 + alignment_length,
                                         &offset_length, "offset");
     length = alignment_length + offset_length;
+  }
+};
+
+struct ReturnArityOperand {
+  uint32_t arity;
+  unsigned length;
+
+  inline ReturnArityOperand(Decoder* decoder, const byte* pc) {
+    arity = decoder->checked_read_u32v(pc, 1, &length, "return count");
   }
 };
 
@@ -189,6 +217,11 @@ struct FunctionBody {
   const byte* end;    // end of the function body
 };
 
+static inline FunctionBody FunctionBodyForTesting(const byte* start,
+                                                  const byte* end) {
+  return {nullptr, nullptr, start, start, end};
+}
+
 struct Tree;
 typedef Result<Tree*> TreeResult;
 
@@ -198,7 +231,12 @@ TreeResult VerifyWasmCode(base::AccountingAllocator* allocator,
                           FunctionBody& body);
 TreeResult BuildTFGraph(base::AccountingAllocator* allocator,
                         TFBuilder* builder, FunctionBody& body);
-void PrintAst(base::AccountingAllocator* allocator, FunctionBody& body);
+bool PrintAst(base::AccountingAllocator* allocator, const FunctionBody& body,
+              std::ostream& os,
+              std::vector<std::tuple<uint32_t, int, int>>* offset_table);
+
+// A simplified form of AST printing, e.g. from a debugger.
+void PrintAstForDebugging(const byte* start, const byte* end);
 
 inline TreeResult VerifyWasmCode(base::AccountingAllocator* allocator,
                                  ModuleEnv* module, FunctionSig* sig,
@@ -214,11 +252,6 @@ inline TreeResult BuildTFGraph(base::AccountingAllocator* allocator,
   FunctionBody body = {module, sig, nullptr, start, end};
   return BuildTFGraph(allocator, builder, body);
 }
-
-enum ReadUnsignedLEB128ErrorCode { kNoError, kInvalidLEB128, kMissingLEB128 };
-
-ReadUnsignedLEB128ErrorCode ReadUnsignedLEB128Operand(const byte*, const byte*,
-                                                      int*, uint32_t*);
 
 struct AstLocalDecls {
   // The size of the encoded declarations.
@@ -240,11 +273,11 @@ BitVector* AnalyzeLoopAssignmentForTesting(Zone* zone, size_t num_locals,
                                            const byte* start, const byte* end);
 
 // Computes the length of the opcode at the given address.
-int OpcodeLength(const byte* pc, const byte* end);
+unsigned OpcodeLength(const byte* pc, const byte* end);
 
 // Computes the arity (number of sub-nodes) of the opcode at the given address.
-int OpcodeArity(ModuleEnv* module, FunctionSig* sig, const byte* pc,
-                const byte* end);
+unsigned OpcodeArity(const byte* pc, const byte* end);
+
 }  // namespace wasm
 }  // namespace internal
 }  // namespace v8
